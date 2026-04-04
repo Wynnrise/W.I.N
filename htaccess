@@ -1,0 +1,146 @@
+# ============================================================
+# Wynston.ca — .htaccess
+# Security, rate limiting, bot protection & scraping prevention
+# Optimised for Hostinger shared hosting (Apache + LiteSpeed)
+# ============================================================
+
+Options -Indexes
+ServerSignature Off
+
+# ── Rewrite engine ────────────────────────────────────────────────────
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /
+
+    # Force HTTPS
+    RewriteCond %{HTTPS} off
+    RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+    # Force www (optional — remove if you prefer non-www)
+    # RewriteCond %{HTTP_HOST} !^www\. [NC]
+    # RewriteRule ^ https://www.%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+
+    # ── Block known scraper user-agents from pre-sale pages ──────────
+    RewriteCond %{HTTP_USER_AGENT} (DataForSeo|SemrushBot|AhrefsBot|MJ12bot|DotBot|BLEXBot|PetalBot|serpstatbot|Bytespider|CCBot|omgilibot|omgili|python-requests|scrapy|wget|curl|libwww|lwp-trivial|httrack|webzip|teleport|webcopier|offline|grabber|webwhacker|harvest|sitesnagger|dirharvest|void-bot|cherrypicker|emailsiphon|emailwolf|emailcollector) [NC]
+    RewriteCond %{REQUEST_URI} ^/(half-map|single-property-2|concierge-property|neighbourhood)\.php [NC]
+    RewriteRule ^ - [F,L]
+
+    # ── Block headless browser signatures ────────────────────────────
+    RewriteCond %{HTTP_USER_AGENT} (HeadlessChrome|PhantomJS|Puppeteer|Playwright|selenium|webdriver) [NC]
+    RewriteRule ^ - [F,L]
+
+    # ── Block empty user-agents on listing pages ──────────────────────
+    RewriteCond %{HTTP_USER_AGENT} ^-?$
+    RewriteCond %{REQUEST_URI} ^/(half-map|single-property-2|concierge-property)\.php [NC]
+    RewriteRule ^ - [F,L]
+
+    # ── Block direct access to sensitive files ────────────────────────
+    RewriteRule ^(ddf_sync|db|data_loader)\.php$ - [F,L]
+</IfModule>
+
+
+# ── Block bad bots via SetEnvIf (fallback for LiteSpeed) ──────────────
+<IfModule mod_setenvif.c>
+    SetEnvIfNoCase User-Agent "DataForSeo"      bad_bot
+    SetEnvIfNoCase User-Agent "AhrefsBot"       bad_bot
+    SetEnvIfNoCase User-Agent "MJ12bot"         bad_bot
+    SetEnvIfNoCase User-Agent "DotBot"          bad_bot
+    SetEnvIfNoCase User-Agent "BLEXBot"         bad_bot
+    SetEnvIfNoCase User-Agent "serpstatbot"     bad_bot
+    SetEnvIfNoCase User-Agent "Bytespider"      bad_bot
+    SetEnvIfNoCase User-Agent "CCBot"           bad_bot
+    SetEnvIfNoCase User-Agent "omgili"          bad_bot
+    SetEnvIfNoCase User-Agent "python-requests" bad_bot
+    SetEnvIfNoCase User-Agent "scrapy"          bad_bot
+    SetEnvIfNoCase User-Agent "HeadlessChrome"  bad_bot
+    SetEnvIfNoCase User-Agent "PhantomJS"       bad_bot
+    SetEnvIfNoCase User-Agent "Puppeteer"       bad_bot
+    <RequireAll>
+        Require all granted
+        Require not env bad_bot
+    </RequireAll>
+</IfModule>
+
+
+# ── Rate limiting via mod_ratelimit (if available on your plan) ───────
+<IfModule mod_ratelimit.c>
+    <Location /half-map.php>
+        SetOutputFilter RATE_LIMIT
+        SetEnv rate-limit 400
+    </Location>
+    <Location /single-property-2.php>
+        SetOutputFilter RATE_LIMIT
+        SetEnv rate-limit 400
+    </Location>
+    <Location /concierge-property.php>
+        SetOutputFilter RATE_LIMIT
+        SetEnv rate-limit 400
+    </Location>
+</IfModule>
+
+
+# ── Protect admin and sensitive files ─────────────────────────────────
+<FilesMatch "^(admin|ddf_sync|db|data_loader)\.php$">
+    <RequireAll>
+        Require all denied
+    </RequireAll>
+</FilesMatch>
+
+# Allow admin only from your IP — replace with your actual IP
+# Uncomment and set your IP once you know it:
+# <Files "admin.php">
+#     Require ip 123.456.789.000
+# </Files>
+
+
+# ── Hotlink protection for listing images ─────────────────────────────
+<IfModule mod_rewrite.c>
+    RewriteCond %{HTTP_REFERER} !^$
+    RewriteCond %{HTTP_REFERER} !^https?://(www\.)?wynston\.ca [NC]
+    RewriteCond %{HTTP_REFERER} !^https?://(www\.)?hostinger [NC]
+    RewriteRule \.(jpg|jpeg|png|gif|webp)$ - [F,NC]
+</IfModule>
+
+
+# ── Security headers ──────────────────────────────────────────────────
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set X-XSS-Protection "1; mode=block"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    Header always set Permissions-Policy "geolocation=(), microphone=(), camera=()"
+
+    # Cache control for listing pages — prevent aggressive caching by proxies
+    <FilesMatch "\.(php)$">
+        Header set Cache-Control "private, no-store, no-cache, must-revalidate"
+        Header set Pragma "no-cache"
+    </FilesMatch>
+
+    # Cache static assets aggressively
+    <FilesMatch "\.(css|js|png|jpg|jpeg|gif|webp|woff|woff2|ttf|svg|ico)$">
+        Header set Cache-Control "public, max-age=31536000, immutable"
+    </FilesMatch>
+
+    # Data ownership header — appears in every HTTP response
+    Header always set X-Data-Owner "Wynston.ca - Proprietary Coming Soon Database - Unauthorized scraping prohibited - See https://www.wynston.ca/terms.php#s7"
+</IfModule>
+
+
+# ── Block XML-RPC and other common attack vectors ─────────────────────
+<Files "xmlrpc.php">
+    Require all denied
+</Files>
+
+# ── Prevent access to hidden files ────────────────────────────────────
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>
+
+# ── PHP settings (Hostinger compatible) ───────────────────────────────
+<IfModule mod_php.c>
+    php_flag expose_php Off
+    php_value session.cookie_httponly 1
+    php_value session.cookie_secure 1
+    php_value session.use_strict_mode 1
+</IfModule>

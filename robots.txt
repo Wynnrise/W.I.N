@@ -1,0 +1,125 @@
+# ============================================================
+# Wynston.ca — robots.txt
+# © 2025 Wynston.ca — Tam Nguyen, REALTOR® | Royal Pacific Realty Corporation
+# ============================================================
+#
+# NOTICE: The Wynston Coming Soon database is a proprietary compiled
+# work protected under the Copyright Act (Canada). Automated scraping,
+# crawling, or harvesting of Coming Soon listing data is strictly
+# prohibited regardless of the instructions in this file.
+# See: https://www.wynston.ca/terms.php#s7
+# ============================================================
+
+
+# ── Legitimate search engines — full access to public pages ──────────
+User-agent: Googlebot
+Allow: /
+Disallow: /Base/
+Disallow: /uploads/
+Disallow: /admin.php
+Disallow: /developer-dashboard.php
+Disallow: /submit-property.php
+Disallow: /log-in.php
+Disallow: /create-account.php
+Disallow: /ddf_sync.php
+Disallow: /cache/
+Crawl-delay: 2
+
+User-agent: Bingbot
+Allow: /
+Disallow: /Base/
+Disallow: /uploads/
+Disallow: /admin.php
+Disallow: /developer-dashboard.php
+Disallow: /submit-property.php
+Disallow: /log-in.php
+Disallow: /create-account.php
+Disallow: /ddf_sync.php
+Disallow: /cache/
+Crawl-delay: 3
+
+# ── Known real estate data scrapers — block entirely ─────────────────
+# These bots are used by competing listing aggregators
+
+User-agent: DataForSeoBot
+Disallow: /
+
+User-agent: SemrushBot
+Disallow: /half-map.php
+Disallow: /single-property-2.php
+Disallow: /concierge-property.php
+Disallow: /neighbourhood.php
+Disallow: /neighbourhoods.php
+
+User-agent: AhrefsBot
+Disallow: /half-map.php
+Disallow: /single-property-2.php
+Disallow: /concierge-property.php
+Disallow: /neighbourhood.php
+Disallow: /neighbourhoods.php
+
+User-agent: MJ12bot
+Disallow: /
+
+User-agent: DotBot
+Disallow: /
+
+User-agent: BLEXBot
+Disallow: /
+
+User-agent: PetalBot
+Disallow: /
+
+User-agent: serpstatbot
+Disallow: /
+
+User-agent: Bytespider
+Disallow: /
+
+User-agent: GPTBot
+Disallow: /half-map.php
+Disallow: /single-property-2.php
+Disallow: /concierge-property.php
+Disallow: /neighbourhood.php
+Disallow: /neighbourhoods.php
+
+User-agent: ClaudeBot
+Disallow: /half-map.php
+Disallow: /single-property-2.php
+Disallow: /concierge-property.php
+
+User-agent: CCBot
+Disallow: /
+
+User-agent: omgili
+Disallow: /
+
+User-agent: omgilibot
+Disallow: /
+
+# ── Generic catch-all for unrecognised bots ───────────────────────────
+User-agent: *
+Allow: /index.php
+Allow: /active-listings.php
+Allow: /about-us.php
+Allow: /contact.php
+Allow: /terms.php
+Allow: /privacy.php
+Allow: /disclaimer.php
+Allow: /neighbourhoods.php
+Allow: /neighbourhood.php
+Disallow: /half-map.php
+Disallow: /single-property-2.php
+Disallow: /concierge-property.php
+Disallow: /admin.php
+Disallow: /Base/
+Disallow: /uploads/
+Disallow: /cache/
+Disallow: /developer-dashboard.php
+Disallow: /submit-property.php
+Disallow: /ddf_sync.php
+Crawl-delay: 5
+
+
+# ── Sitemap ───────────────────────────────────────────────────────────
+Sitemap: https://www.wynston.ca/sitemap.xml

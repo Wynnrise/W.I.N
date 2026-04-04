@@ -1,0 +1,4 @@
+Base/db.php
+dev-auth.php
+*.log
+.env

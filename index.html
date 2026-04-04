@@ -1,0 +1,39 @@
+<?php
+/**
+ * Wynston Cron 1 — Nightly (runs 2am via Hostinger cron)
+ * Hostinger cron command: php /home/u990588858/public_html/cron/cron1_nightly.php
+ *
+ * Tasks:
+ *   1. Pull all R1-1 lots from COV Property Tax API → plex_properties
+ *   2. Pull TransLink FTN stops from GTFS API → transit_stops
+ *   3. Update transit_proximate + nearest_ftn_stop_m for every lot
+ */
+
+require_once __DIR__ . '/../config/cron_config.php';
+
+$log = new CronLogger('cron1_nightly');
+$log->info('=== Cron 1 start ===');
+
+try {
+    $pdo = db_connect();
+
+    // Task 1 — COV lots
+    $log->info('Task 1: COV R1-1 lot pull');
+    $puller = new CovLotPuller($pdo, $log);
+    $puller->run();
+
+    // Task 2 — TransLink FTN stops
+    $log->info('Task 2: TransLink FTN stop pull');
+    $transit = new TransitPuller($pdo, $log);
+    $transit->run();
+
+    // Task 3 — Update transit proximity on all lots
+    $log->info('Task 3: Transit proximity update');
+    $proximity = new TransitProximityUpdater($pdo, $log);
+    $proximity->run();
+
+    $log->info('=== Cron 1 complete ===');
+
+} catch (Exception $e) {
+    $log->error('Fatal: ' . $e->getMessage());
+}
