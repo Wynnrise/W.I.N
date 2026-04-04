@@ -1,4 +1,7 @@
 Base/db.php
 dev-auth.php
 *.log
+.envBase/db.php
+dev-auth.php
+*.log
 .env
