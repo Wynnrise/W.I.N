@@ -1,6 +1,12 @@
 Base/db.php
 dev-auth.php
 *.log
+.env
+uploads/
+data/property-tax-report.csv
+data/*.csvBase/db.php
+dev-auth.php
+*.log
 .envBase/db.php
 dev-auth.php
 *.log
