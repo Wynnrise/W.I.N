@@ -237,6 +237,12 @@ html,body{height:100%;overflow:hidden;font-family:'Segoe UI',system-ui,sans-seri
           <span class="w-tool-toggle-label">Active Permits</span>
           <div class="w-tool-switch"></div>
         </div>
+        <div class="w-tool-toggle" id="tgl-neighbourhoods" onclick="toolToggle('neighbourhoods')">
+          <div class="w-tool-toggle-icon" style="background:rgba(201,168,76,0.15);"><i class="fas fa-draw-polygon" style="font-size:11px;color:#c9a84c;"></i></div>
+          <span class="w-tool-toggle-label">Neighbourhood Borders</span>
+          <i class="w-tool-info">ⓘ<span class="w-tooltip">Shows the 22 COV official neighbourhood boundaries. Useful for understanding which market data applies to each lot.</span></i>
+          <div class="w-tool-switch"></div>
+        </div>
       </div>
       <div class="w-tool-section">
         <div class="w-tool-section-label">Filter Lots</div>
@@ -270,6 +276,30 @@ html,body{height:100%;overflow:hidden;font-family:'Segoe UI',system-ui,sans-seri
           <i class="w-tool-info">ⓘ<span class="w-tooltip">Lots within 400m of a SkyTrain or major transit stop. COV exempts these from parking stall requirements — saving $80K–$150K+ in build cost depending on unit count.</span></i>
           <div class="w-tool-switch"></div>
         </div>
+      </div>
+      <div class="w-tool-section">
+        <div class="w-tool-section-label">Constraint Overlays</div>
+        <div class="w-tool-toggle" id="tgl-heritage" onclick="toolToggle('heritage')">
+          <div class="w-tool-toggle-icon" style="background:rgba(30,64,175,0.15);"><i class="fas fa-landmark" style="font-size:11px;color:#1e40af;"></i></div>
+          <span class="w-tool-toggle-label">Heritage Properties</span>
+          <i class="w-tool-info">ⓘ<span class="w-tooltip">Highlights COV heritage-designated lots in dark blue. Category A/B require Heritage Revitalization Agreement. Category C requires inspection.</span></i>
+          <div class="w-tool-switch"></div>
+        </div>
+        <div class="w-tool-toggle" id="tgl-peat" onclick="toolToggle('peat')">
+          <div class="w-tool-toggle-icon" style="background:rgba(120,53,15,0.15);"><i class="fas fa-layer-group" style="font-size:11px;color:#78350f;"></i></div>
+          <span class="w-tool-toggle-label">Peat Zone</span>
+          <i class="w-tool-info">ⓘ<span class="w-tooltip">Shows lots within known Vancouver peat bog zones. Peat soil requires helical pile foundations — adds approximately $150,000 to build cost.</span></i>
+          <div class="w-tool-switch"></div>
+        </div>
+        <div class="w-tool-toggle" id="tgl-flood" onclick="toolToggle('flood')">
+          <div class="w-tool-toggle-icon" style="background:rgba(37,99,235,0.15);"><i class="fas fa-water" style="font-size:11px;color:#2563eb;"></i></div>
+          <span class="w-tool-toggle-label">Floodplain</span>
+          <i class="w-tool-info">ⓘ<span class="w-tooltip">Shows lots within COV designated floodplains and Still Creek floodplain. May affect construction permits, financing, and insurance.</span></i>
+          <div class="w-tool-switch"></div>
+        </div>
+
+      </div>
+      <div class="w-tool-section" style="display:none"><!-- placeholder close -->
       </div>
     </div>
   </div>
@@ -313,7 +343,7 @@ const IS_LOGGED_IN = <?= isset($_SESSION['dev_id']) ? 'true' : 'false' ?>;
 // ── State ─────────────────────────────────────────────────────
 let map, currentLot = null, is3D = false, fetchSeq = 0;
 let currentPath = 'strata', currentData = null;
-let toolState = { halos:true, skytrain:true, permits:true, '6unit':false, '4unit':false, duplex:false, buyout:false, nopark:false };
+let toolState = { halos:true, skytrain:true, permits:true, neighbourhoods:false, '6unit':false, '4unit':false, duplex:false, buyout:false, nopark:false, heritage:false, peat:false, flood:false };
 
 // ── Property highlight ─────────────────────────────────────────
 // Pulsing gold ring shown on the selected lot — makes it easy to
@@ -379,6 +409,22 @@ function addMapSourcesAndLayers() {
   if (!map.getSource('selected-lot'))
     map.addSource('selected-lot', { type:'geojson', data:{ type:'FeatureCollection', features:[] } });
 
+  // Neighbourhood boundary source — static GeoJSON file
+  if (!map.getSource('neighbourhood-boundaries'))
+    map.addSource('neighbourhood-boundaries', {
+      type: 'geojson',
+      data: '/neighbourhood-boundaries.geojson'
+    });
+
+  // Constraint overlay sources (populated from lots GeoJSON after load)
+  if (!map.getSource('flood-overlay'))
+    map.addSource('flood-overlay', { type:'geojson', data:{ type:'FeatureCollection', features:[] } });
+  if (!map.getSource('heritage-overlay'))
+    map.addSource('heritage-overlay', { type:'geojson', data:{ type:'FeatureCollection', features:[] } });
+  if (!map.getSource('peat-overlay'))
+    map.addSource('peat-overlay', { type:'geojson', data:{ type:'FeatureCollection', features:[] } });
+
+
   // Transit halos
   if (!map.getLayer('transit-halos'))
     map.addLayer({ id:'transit-halos', type:'circle', source:'transit-halos',
@@ -397,6 +443,61 @@ function addMapSourcesAndLayers() {
       paint:{ 'circle-radius':['interpolate',['linear'],['zoom'],10,2,13,4,16,5],
         'circle-color':'#c9a84c', 'circle-opacity':1 } });
 
+  // ── Neighbourhood boundary layers ─────────────────────────
+  // Outline
+  if (!map.getLayer('neighbourhood-lines'))
+    map.addLayer({ id:'neighbourhood-lines', type:'line', source:'neighbourhood-boundaries',
+      layout:{ visibility:'none' },
+      paint:{
+        'line-color':'#c9a84c',
+        'line-width':['interpolate',['linear'],['zoom'],10,1,14,2,16,2.5],
+        'line-opacity':0.7,
+        'line-dasharray':[3,2],
+      }});
+
+  // Labels
+  if (!map.getLayer('neighbourhood-labels'))
+    map.addLayer({ id:'neighbourhood-labels', type:'symbol', source:'neighbourhood-boundaries',
+      layout:{
+        visibility:'none',
+        'text-field':['get','name'],
+        'text-size':['interpolate',['linear'],['zoom'],10,10,13,13,15,15],
+        'text-font':['DIN Offc Pro Medium','Arial Unicode MS Bold'],
+        'text-anchor':'center',
+        'text-max-width':8,
+      },
+      paint:{
+        'text-color':'#c9a84c',
+        'text-halo-color':'rgba(0,0,0,0.7)',
+        'text-halo-width':1.5,
+      }});
+
+  // ── Constraint overlay layers (below lot pins) ────────────
+  // Floodplain — blue halo
+  if (!map.getLayer('flood-overlay'))
+    map.addLayer({ id:'flood-overlay', type:'circle', source:'flood-overlay',
+      layout:{ visibility:'none' },
+      paint:{
+        'circle-radius':{ stops:[[10,10],[12,20],[14,40],[16,70]], base:2 },
+        'circle-color':'rgba(37,99,235,0.15)',
+        'circle-stroke-color':'rgba(37,99,235,0.55)',
+        'circle-stroke-width':1.5,
+      }});
+
+  // Peat zone — brown translucent halo
+  if (!map.getLayer('peat-overlay'))
+    map.addLayer({ id:'peat-overlay', type:'circle', source:'peat-overlay',
+      layout:{ visibility:'none' },
+      paint:{
+        'circle-radius':{ stops:[[10,8],[12,16],[14,30],[16,50]], base:2 },
+        'circle-color':'rgba(120,53,15,0.18)',
+        'circle-stroke-color':'rgba(120,53,15,0.5)',
+        'circle-stroke-width':1.5,
+        'circle-opacity':1,
+      }});
+
+
+
   // Lot pins
   if (!map.getLayer('lot-pins'))
     map.addLayer({ id:'lot-pins', type:'circle', source:'lots',
@@ -407,7 +508,33 @@ function addMapSourcesAndLayers() {
           ['all',['>=',['get','lot_width_m'],10.0],['==',['get','lane_access'],1]],'#14b8a6',
           ['all',['>=',['get','lot_width_m'],7.5], ['==',['get','lane_access'],1]],'#f59e0b',
           '#94a3b8'],
-        'circle-stroke-width':1.5, 'circle-stroke-color':'rgba(0,0,0,0.3)', 'circle-opacity':0.85 } });
+        'circle-stroke-width':1.5,
+        'circle-stroke-color':['case',
+          ['all', ['!=',['get','heritage_category'],'none'], ['!=',['get','heritage_category'],null]],
+          'rgba(30,64,175,0.8)',
+          'rgba(0,0,0,0.3)'],
+        'circle-opacity':0.85,
+        'circle-color':['case',
+          // Heritage override — dark blue regardless of eligibility
+          ['all', ['!=',['get','heritage_category'],'none'], ['!=',['get','heritage_category'],null]], '#1e40af',
+          // Normal eligibility tiers
+          ['all',['>=',['get','lot_width_m'],15.1],['==',['get','transit_proximate'],1],['==',['get','lane_access'],1]],'#22c55e',
+          ['all',['>=',['get','lot_width_m'],10.0],['==',['get','lane_access'],1]],'#14b8a6',
+          ['all',['>=',['get','lot_width_m'],7.5], ['==',['get','lane_access'],1]],'#f59e0b',
+          '#94a3b8'],
+      } });
+
+  // Heritage pin label ring — extra dark blue stroke on heritage lots
+  if (!map.getLayer('heritage-ring'))
+    map.addLayer({ id:'heritage-ring', type:'circle', source:'heritage-overlay',
+      layout:{ visibility:'none' },
+      paint:{
+        'circle-radius':['interpolate',['linear'],['zoom'],11,5,14,9,16,12],
+        'circle-color':'transparent',
+        'circle-stroke-width':2.5,
+        'circle-stroke-color':'#1e40af',
+        'circle-opacity':0,
+      }});
 
   // ── Gold pulsing ring — selected lot highlight ─────────────
   // Sits above lot-pins so it's always visible.
@@ -447,6 +574,19 @@ function loadTransitData() {
       .filter(f=>{ const k=`${Math.round(f.geometry.coordinates[0]*150)},${Math.round(f.geometry.coordinates[1]*150)}`; if(seen.has(k))return false; seen.add(k);return true; })
       .map(f=>({ type:'Feature', geometry:f.geometry, properties:{} }));
     if (map.getSource('transit-halos')) map.getSource('transit-halos').setData({ type:'FeatureCollection', features:halos });
+
+    // Heritage overlay — lots with any heritage category
+    const heritageFeats = data.features.filter(f => f.properties.heritage_category && f.properties.heritage_category !== 'none');
+    if (map.getSource('heritage-overlay')) map.getSource('heritage-overlay').setData({ type:'FeatureCollection', features:heritageFeats });
+
+    // Flood overlay
+    const floodFeats = data.features.filter(f => f.properties.floodplain_risk && f.properties.floodplain_risk !== 'none');
+    if (map.getSource('flood-overlay')) map.getSource('flood-overlay').setData({ type:'FeatureCollection', features:floodFeats });
+
+    // Peat overlay
+    const peatFeats = data.features.filter(f => f.properties.peat_zone === 1);
+    if (map.getSource('peat-overlay')) map.getSource('peat-overlay').setData({ type:'FeatureCollection', features:peatFeats });
+
   }).catch(()=>{});
   fetch('/api/transit_stops.php?v=3').then(r=>r.json()).then(data=>{
     if (map.getSource('skytrain-stops')) map.getSource('skytrain-stops').setData(data);
@@ -587,6 +727,9 @@ function applyToolState() {
   if(map.getLayer('skytrain-stops'))map.setLayoutProperty('skytrain-stops','visibility',toolState.skytrain?'visible':'none');
   if(map.getLayer('skytrain-stops-ring'))map.setLayoutProperty('skytrain-stops-ring','visibility',toolState.skytrain?'visible':'none');
   if(map.getLayer('permit-pins'))map.setLayoutProperty('permit-pins','visibility',toolState.permits?'visible':'none');
+  const nbVis = toolState.neighbourhoods ? 'visible' : 'none';
+  if(map.getLayer('neighbourhood-lines'))  map.setLayoutProperty('neighbourhood-lines',  'visibility', nbVis);
+  if(map.getLayer('neighbourhood-labels')) map.setLayoutProperty('neighbourhood-labels', 'visibility', nbVis);
   const f=['all'];
   if(toolState['6unit']){f.push(['>=',['get','lot_width_m'],15.1]);f.push(['==',['get','transit_proximate'],1]);f.push(['==',['get','lane_access'],1]);}
   if(toolState['4unit']){f.push(['>=',['get','lot_width_m'],10.0]);f.push(['<',['get','lot_width_m'],15.1]);f.push(['==',['get','lane_access'],1]);}
@@ -594,6 +737,16 @@ function applyToolState() {
   if(toolState['buyout']){f.push(['>=',['get','lot_width_m'],14.5]);f.push(['<',['get','lot_width_m'],15.1]);f.push(['==',['get','lane_access'],1]);f.push(['==',['get','transit_proximate'],1]);}
   if(toolState['nopark']){f.push(['==',['get','transit_proximate'],1]);}
   if(map.getLayer('lot-pins'))map.setFilter('lot-pins',f.length>1?f:null);
+
+  // Constraint overlay visibility
+  const herVis = toolState.heritage ? 'visible' : 'none';
+  const peatVis = toolState.peat    ? 'visible' : 'none';
+
+  if(map.getLayer('heritage-ring'))  map.setLayoutProperty('heritage-ring',  'visibility', herVis);
+  if(map.getLayer('peat-overlay'))   map.setLayoutProperty('peat-overlay',   'visibility', peatVis);
+  const floodVis = toolState.flood ? 'visible' : 'none';
+  if(map.getLayer('flood-overlay'))  map.setLayoutProperty('flood-overlay',  'visibility', floodVis);
+
 }
 
 // ── Draggable tool menu ───────────────────────────────────────
@@ -771,6 +924,8 @@ function buildFlags(p) {
   if(p.peat_zone)f+=`<div class="w-flag w-flag-yellow"><i class="fas fa-exclamation-triangle"></i><span><strong>Peat Zone</strong> — $150,000 contingency added.</span></div>`;
   if(p.covenant_present)f+=`<div class="w-flag w-flag-blue"><i class="fas fa-file-contract"></i><span><strong>Title encumbrance detected</strong> — Obtain a title search before proceeding.</span></div>`;
   if(!p.lane_access)f+=`<div class="w-flag w-flag-yellow"><i class="fas fa-road"></i><span><strong>No lane access detected</strong> — Verify with COV.</span></div>`;
+  if(p.floodplain_risk==='high')f+=`<div class="w-flag w-flag-red"><i class="fas fa-water"></i><span><strong>Floodplain</strong> — COV designated flood area. May affect permits, financing, and insurance.</span></div>`;
+
   return f?`<div class="w-section">${f}</div>`:'';
 }
 
