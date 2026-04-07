@@ -180,14 +180,6 @@ html,body{height:100%;overflow:hidden;font-family:'Segoe UI',system-ui,sans-seri
 .w-panel-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#bbb;text-align:center;padding:32px}
 .w-panel-empty i{font-size:36px;margin-bottom:12px}
 .w-panel-empty p{font-size:13px;line-height:1.6}
-/* ── Toast notifications ─────────────────────────────── */
-.w-toast-wrap{position:fixed;bottom:32px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none}
-.w-toast{background:rgba(0,20,46,.97);backdrop-filter:blur(12px);border:1px solid rgba(201,168,76,.4);color:#fff;font-size:13px;font-weight:600;padding:10px 20px;border-radius:24px;box-shadow:0 4px 20px rgba(0,0,0,.4);opacity:0;transform:translateY(12px);transition:opacity .25s,transform .25s;pointer-events:none;white-space:nowrap;letter-spacing:.2px}
-.w-toast.show{opacity:1;transform:translateY(0)}
-.w-toast.success i{color:var(--green)}
-.w-toast.info    i{color:var(--gold)}
-.w-toast.warn    i{color:var(--amber)}
-/* ────────────────────────────────────────────────────── */
 .w-permit-banner{background:linear-gradient(135deg,rgba(0,36,70,.95),rgba(0,20,46,.95));border-bottom:2px solid var(--gold);padding:0}
 .w-permit-img{width:100%;height:160px;object-fit:cover;display:block}
 .w-permit-img-placeholder{width:100%;height:120px;background:linear-gradient(135deg,#001a35,#002446);display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.2);font-size:32px}
@@ -343,16 +335,14 @@ html,body{height:100%;overflow:hidden;font-family:'Segoe UI',system-ui,sans-seri
   <div class="w-actions" id="panel-actions" style="display:none"></div>
 </aside>
 
-<div class="w-toast-wrap" id="toast-wrap"></div>
-
 <script>
+// ── Config ────────────────────────────────────────────────────
 const MAPBOX_TOKEN = 'pk.eyJ1IjoiaGVucmluZ3V5ZW4iLCJhIjoiY21uYjg3dTNnMHFkZjJwcHR0bjkwb29ueCJ9.De7GXPlYRlzTJOr9jd5BJg';
 const IS_LOGGED_IN = <?= isset($_SESSION['dev_id']) ? 'true' : 'false' ?>;
 
 // ── State ─────────────────────────────────────────────────────
 let map, currentLot = null, is3D = false, fetchSeq = 0;
 let currentPath = 'strata', currentData = null;
-let savedLotPids = new Set(); // tracks which PIDs are saved this session
 let toolState = { halos:true, skytrain:true, permits:true, neighbourhoods:false, '6unit':false, '4unit':false, duplex:false, buyout:false, nopark:false, heritage:false, peat:false, flood:false };
 
 // ── Property highlight ─────────────────────────────────────────
@@ -572,7 +562,7 @@ function addMapSourcesAndLayers() {
   applyToolState();
 }
 
-map.on('load', () => { addMapSourcesAndLayers(); loadSavedPids(); });
+map.on('load', () => { addMapSourcesAndLayers(); });
 
 // ── Transit data ──────────────────────────────────────────────
 function loadTransitData() {
@@ -817,8 +807,7 @@ function renderPanel(d,tab) {
   actions.innerHTML=`
     <button class="w-action-btn w-action-gold" onclick="window.location.href='/generate-report.php?pid=${d.property.pid}'"><i class="fas fa-file-pdf"></i> Generate PDF Report</button>
     <button class="w-action-btn w-action-primary" onclick="inquireAcquisition('${d.property.pid}','${escHtml(d.property.address)}')"><i class="fas fa-handshake"></i> Inquire for Acquisition</button>
-    <button class="w-action-btn w-action-secondary" id="save-lot-btn" onclick="saveLot('${d.property.pid}')"><i class="far fa-bookmark"></i> Save Lot</button>`;
-  updateSaveButton(d.property.pid);
+    <button class="w-action-btn w-action-secondary" onclick="saveLot('${d.property.pid}')"><i class="far fa-bookmark"></i> Save Lot</button>`;
 }
 
 function renderPanelBody(d,tab) {
@@ -966,85 +955,13 @@ function toggle3D() {
   }
 }
 
-// ── Toast notification system ─────────────────────────────────
-function showToast(msg, type='success', duration=3000) {
-  const wrap = document.getElementById('toast-wrap');
-  const icons = { success:'<i class="fas fa-check-circle" style="margin-right:7px"></i>', info:'<i class="fas fa-info-circle" style="margin-right:7px"></i>', warn:'<i class="fas fa-exclamation-triangle" style="margin-right:7px"></i>' };
-  const el = document.createElement('div');
-  el.className = `w-toast ${type}`;
-  el.innerHTML = (icons[type]||'') + escHtml(msg);
-  wrap.appendChild(el);
-  requestAnimationFrame(()=>{ requestAnimationFrame(()=>{ el.classList.add('show'); }); });
-  setTimeout(()=>{ el.classList.remove('show'); setTimeout(()=>el.remove(), 280); }, duration);
-}
-
-// ── Load saved lots for this session (called once at login) ───
-function loadSavedPids() {
-  if (!IS_LOGGED_IN) return;
-  fetch('/api/saved_lots.php')
-    .then(r => r.json())
-    .then(d => {
-      if (d.success && d.lots) {
-        savedLotPids = new Set(d.lots.map(l => l.pid));
-      }
-    }).catch(() => {});
-}
-
-// ── Update bookmark button state in open panel ────────────────
-function updateSaveButton(pid) {
-  const btn = document.getElementById('save-lot-btn');
-  if (!btn) return;
-  const isSaved = savedLotPids.has(pid);
-  btn.innerHTML = isSaved
-    ? '<i class="fas fa-bookmark"></i> Saved'
-    : '<i class="far fa-bookmark"></i> Save Lot';
-  btn.style.background = isSaved ? 'rgba(201,168,76,0.12)' : '';
-  btn.style.borderColor = isSaved ? 'var(--gold)' : '';
-  btn.style.color       = isSaved ? 'var(--gold)' : '';
-}
-
 // ── Action handlers ───────────────────────────────────────────
-function inquireAcquisition(pid, address) {
-  const msg = prompt(`Acquisition inquiry for:\n${address}\n\nAdd a message (optional — press Cancel to abort):`);
-  if (msg === null) return; // user pressed Cancel
-  fetch('/api/inquire.php', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pid, message: msg.trim() })
-  })
-  .then(r => r.json())
-  .then(d => {
-    if (d.success) {
-      showToast(d.already_exists ? 'Inquiry already open — our team will be in touch.' : '✓ Inquiry submitted. We\'ll contact you within 4 hours.', d.already_exists ? 'info' : 'success', 4500);
-    } else {
-      showToast('Something went wrong. Please try again.', 'warn');
-    }
-  })
-  .catch(() => showToast('Network error. Please try again.', 'warn'));
+function inquireAcquisition(pid,address){
+  if(confirm(`Submit acquisition inquiry for:\n${address}\n\nOur team will contact you within 4 hours.`))
+    fetch('/api/acquisition.php',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pid,address})}).then(r=>r.json()).then(d=>alert(d.success?'✓ Inquiry submitted.':'Something went wrong.'));
 }
-
-function saveLot(pid) {
-  fetch('/api/save_lot.php', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pid })
-  })
-  .then(r => r.json())
-  .then(d => {
-    if (d.success) {
-      if (d.saved) {
-        savedLotPids.add(pid);
-        showToast('Lot saved to Project Planner', 'success');
-      } else {
-        savedLotPids.delete(pid);
-        showToast('Lot removed from saved list', 'info');
-      }
-      updateSaveButton(pid);
-    } else {
-      showToast('Could not save lot. Please try again.', 'warn');
-    }
-  })
-  .catch(() => showToast('Network error. Please try again.', 'warn'));
+function saveLot(pid){
+  fetch('/api/save_lot.php',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pid})}).then(r=>r.json()).then(d=>{if(d.success)alert('✓ Lot saved.')});
 }
 
 // ── Search ────────────────────────────────────────────────────
