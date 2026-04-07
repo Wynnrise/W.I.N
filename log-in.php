@@ -49,7 +49,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Sign In — Wynnston Developer Portal</title>
+    <title>Sign In — Wynston W.I.N</title>
     <link rel="icon" type="image/png" href="/assets/img/favicon.png">
     <link rel="shortcut icon" href="/assets/img/favicon.png">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -136,28 +136,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <img src="/assets/img/logo-light.png" alt="Wynnston" onerror="this.style.display='none';this.nextSibling.style.display='block'">
         <span style="display:none;color:#fff;font-weight:800;font-size:18px;letter-spacing:1px;">WYNNSTON</span>
     </a>
-    <span class="ac-topbar-link">New developer? <a href="create-account.php">Create account →</a></span>
+    <span class="ac-topbar-link">Don't have access? <a href="create-account.php">Apply for access →</a></span>
 </div>
 
 <div class="ac-wrap">
 
     <!-- LEFT -->
     <div class="ac-left">
-        <div class="ac-left-badge"><i class="fas fa-gem"></i> Developer Portal</div>
+        <div class="ac-left-badge"><i class="fas fa-map-marked-alt"></i> W.I.N — Wynston Intelligent Navigator</div>
         <h1>Welcome <span>Back</span></h1>
-        <p>Sign in to manage your listings, track buyer inquiries, and update your developments on Wynnston Concierge.</p>
+        <p>Vancouver's professional-grade multiplex intelligence platform. Built for the people who build the city.</p>
         <div class="ac-stat-row">
             <div class="ac-stat">
-                <div class="ac-stat-num">3,200+</div>
-                <div class="ac-stat-label">Active Listings</div>
+                <div class="ac-stat-num">68,000+</div>
+                <div class="ac-stat-label">R1-1 Lots Mapped</div>
             </div>
             <div class="ac-stat">
-                <div class="ac-stat-num">100%</div>
-                <div class="ac-stat-label">Metro Vancouver</div>
+                <div class="ac-stat-num">6</div>
+                <div class="ac-stat-label">Data Sources</div>
             </div>
             <div class="ac-stat">
-                <div class="ac-stat-num">24/7</div>
-                <div class="ac-stat-label">Buyer Access</div>
+                <div class="ac-stat-num">4</div>
+                <div class="ac-stat-label">Outlook Layers</div>
+            </div>
+        </div>
+        <div style="margin-top:40px;padding-top:28px;border-top:1px solid rgba(255,255,255,0.1);">
+            <p style="font-size:12px;color:rgba(255,255,255,0.3);text-transform:uppercase;letter-spacing:1.2px;margin-bottom:14px;font-weight:700;">Trusted by professionals in</p>
+            <div style="display:flex;gap:16px;flex-wrap:wrap;">
+                <span style="font-size:12px;color:rgba(255,255,255,0.5);background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);padding:5px 12px;border-radius:20px;">Development</span>
+                <span style="font-size:12px;color:rgba(255,255,255,0.5);background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);padding:5px 12px;border-radius:20px;">Investment</span>
+                <span style="font-size:12px;color:rgba(255,255,255,0.5);background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);padding:5px 12px;border-radius:20px;">Real Estate</span>
+                <span style="font-size:12px;color:rgba(255,255,255,0.5);background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);padding:5px 12px;border-radius:20px;">Mortgage</span>
             </div>
         </div>
     </div>
@@ -166,15 +175,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="ac-right">
         <div class="ac-right-inner">
             <h2>Sign In</h2>
-            <p class="ac-sub">Access your developer dashboard.</p>
+            <p class="ac-sub">Access your W.I.N dashboard.</p>
 
-            <!-- Social login — available after domain goes live -->
-            <div style="background:#f9f9f9;border:1px solid #eee;border-radius:10px;padding:12px 16px;margin-bottom:24px;font-size:13px;color:#888;display:flex;align-items:center;gap:10px;">
-                <i class="fas fa-lock" style="color:#bbb;"></i>
-                Google &amp; Apple sign-in will be available once the site moves to its permanent domain.
+            <div style="background:#f9f6f0;border:1px solid #e8e4dd;border-radius:10px;padding:16px 18px;margin-bottom:28px;display:flex;gap:14px;align-items:flex-start;">
+                <div style="width:36px;height:36px;background:#002446;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;">
+                    <i class="fas fa-shield-halved" style="color:#c9a84c;font-size:15px;"></i>
+                </div>
+                <div>
+                    <div style="font-size:13px;font-weight:700;color:#002446;margin-bottom:3px;">Verified Professional Access</div>
+                    <div style="font-size:12px;color:#888;line-height:1.6;">W.I.N accounts are individually reviewed by the Wynston team. If you do not have an account, <a href="create-account.php" style="color:#002446;font-weight:700;text-decoration:none;">apply for access →</a></div>
+                </div>
             </div>
-
-            <div class="ac-divider">sign in with email</div>
 
             <?php if (($_GET['reason'] ?? '') === 'timeout'): ?>
             <div class="ac-alert-error" style="background:#fff8e1;border-color:#ffe082;color:#7a5800;">
@@ -207,7 +218,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </form>
 
             <div class="ac-footer">
-                Don't have an account? <a href="create-account.php">Create one →</a>
+                Don't have access? <a href="create-account.php">Apply for access →</a>
             </div>
         </div>
     </div>

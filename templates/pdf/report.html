@@ -1,0 +1,2181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+/* ============================================================
+   Wynston Development Intelligence Report — Print Stylesheet
+   For DOMPDF rendering
+   ============================================================ */
+
+@page {
+    margin: 14mm 12mm 14mm 12mm;
+    size: letter portrait;
+}
+
+@page cover {
+    margin: 0;
+}
+
+@page interior {
+    margin: 18mm 16mm 22mm 16mm;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: DejaVu Sans, Arial, sans-serif;
+    font-size: 9pt;
+    color: #1a1a2e;
+    background: #ffffff;
+    line-height: 1.5;
+}
+
+/* ============================================================
+   COLOUR TOKENS
+   ============================================================ */
+.navy  { color: #002446; }
+.gold  { color: #c9a84c; }
+.cream { background-color: #f9f6f0; }
+.green { color: #22c55e; }
+.teal  { color: #14b8a6; }
+.amber { color: #f59e0b; }
+.gray  { color: #94a3b8; }
+.red   { color: #ef4444; }
+
+/* ============================================================
+   PAGE BREAKS
+   ============================================================ */
+.page {
+    page-break-before: always;
+    position: relative;
+    width: 100%;
+}
+.page:first-child {
+    page-break-before: auto;
+}
+
+/* ============================================================
+   PAGE 1 — COVER
+   ============================================================ */
+.cover {
+    background-color: #002446;
+    color: #f9f6f0;
+    padding: 0;
+    display: block;
+    width: 100%;
+}
+
+.cover-top-bar {
+    background-color: #c9a84c;
+    height: 6px;
+    width: 100%;
+}
+
+.cover-inner {
+    padding: 8mm 10mm;
+}
+
+.cover-logo {
+    font-size: 22pt;
+    font-weight: bold;
+    color: #c9a84c;
+    letter-spacing: 2px;
+    margin-bottom: 2mm;
+}
+
+.cover-logo-sub {
+    font-size: 8pt;
+    color: #f9f6f0;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    margin-bottom: 10mm;
+    opacity: 0.75;
+}
+
+.cover-report-title {
+    font-size: 10pt;
+    color: #c9a84c;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 4mm;
+}
+
+.cover-address {
+    font-size: 22pt;
+    font-weight: bold;
+    color: #f9f6f0;
+    line-height: 1.2;
+    margin-bottom: 3mm;
+}
+
+.cover-pid {
+    font-size: 9pt;
+    color: #c9a84c;
+    margin-bottom: 10mm;
+}
+
+.cover-aerial {
+    width: 100%;
+    height: 68mm;
+    object-fit: cover;
+    border: 2px solid #c9a84c;
+    margin-bottom: 8mm;
+    display: block;
+}
+
+.cover-aerial-placeholder {
+    width: 100%;
+    height: 68mm;
+    background-color: #0a3060;
+    border: 2px solid #c9a84c;
+    margin-bottom: 8mm;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #c9a84c;
+    font-size: 9pt;
+    text-align: center;
+}
+
+.cover-meta-row {
+    margin-bottom: 3mm;
+    font-size: 8.5pt;
+    color: #f9f6f0;
+}
+
+.cover-meta-label {
+    color: #c9a84c;
+    font-weight: bold;
+    display: inline;
+}
+
+.cover-eligibility-badge {
+    display: inline-block;
+    padding: 3mm 6mm;
+    border-radius: 3px;
+    font-size: 10pt;
+    font-weight: bold;
+    margin: 6mm 0 4mm 0;
+    letter-spacing: 1px;
+}
+
+.badge-green  { background-color: #22c55e; color: #fff; }
+.badge-teal   { background-color: #14b8a6; color: #fff; }
+.badge-amber  { background-color: #f59e0b; color: #fff; }
+.badge-gray   { background-color: #94a3b8; color: #fff; }
+
+.cover-confidence-badge {
+    display: inline-block;
+    padding: 2mm 5mm;
+    border: 1px solid #c9a84c;
+    border-radius: 3px;
+    font-size: 8pt;
+    color: #c9a84c;
+    margin-left: 3mm;
+}
+
+.cover-footer {
+    position: absolute;
+    bottom: 8mm;
+    left: 16mm;
+    right: 16mm;
+    font-size: 7pt;
+    color: #f9f6f0;
+    opacity: 0.5;
+    border-top: 1px solid rgba(255,255,255,0.2);
+    padding-top: 3mm;
+}
+
+/* ============================================================
+   INTERIOR PAGES — SHARED
+   ============================================================ */
+.interior {
+    padding: 0;
+    background: #ffffff;
+    width: 100%;
+}
+
+.page-header {
+    border-bottom: 2px solid #002446;
+    padding-bottom: 3mm;
+    margin-bottom: 6mm;
+    display: table;
+    width: 100%;
+    table-layout: fixed;
+}
+
+.page-header-left {
+    display: table-cell;
+    vertical-align: bottom;
+}
+
+.page-header-right {
+    display: table-cell;
+    vertical-align: bottom;
+    text-align: right;
+    font-size: 7.5pt;
+    color: #94a3b8;
+}
+
+.page-section-title {
+    font-size: 13pt;
+    font-weight: bold;
+    color: #002446;
+    margin-bottom: 1mm;
+}
+
+.page-section-sub {
+    font-size: 8pt;
+    color: #94a3b8;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+
+.page-footer {
+    position: absolute;
+    bottom: 6mm;
+    left: 16mm;
+    right: 16mm;
+    font-size: 7pt;
+    color: #94a3b8;
+    border-top: 1px solid #e5e7eb;
+    padding-top: 2mm;
+    display: table;
+    width: 100%;
+}
+
+.page-footer-left  { display: table-cell; }
+.page-footer-right { display: table-cell; text-align: right; }
+
+/* ============================================================
+   PAGE 2 — EXECUTIVE SUMMARY
+   ============================================================ */
+.exec-kpi-row {
+    display: table;
+    width: 100%;
+    margin: 5mm 0;
+    border-collapse: collapse;
+}
+
+.exec-kpi-cell {
+    display: table-cell;
+    background: #f9f6f0;
+    border: 1px solid #e5e7eb;
+    border-top: 3px solid #002446;
+    padding: 4mm;
+    text-align: center;
+    vertical-align: top;
+    width: 20%;
+}
+
+.exec-kpi-label {
+    font-size: 7pt;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 2mm;
+}
+
+.exec-kpi-value {
+    font-size: 12pt;
+    font-weight: bold;
+    color: #002446;
+}
+
+.exec-kpi-sub {
+    font-size: 7pt;
+    color: #94a3b8;
+    margin-top: 1mm;
+}
+
+.exec-next-step {
+    background: #002446;
+    color: #f9f6f0;
+    padding: 5mm 7mm;
+    border-left: 4px solid #c9a84c;
+    margin: 5mm 0;
+    font-size: 9pt;
+    line-height: 1.6;
+}
+
+.exec-next-step-label {
+    font-size: 7pt;
+    color: #c9a84c;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 2mm;
+    font-weight: bold;
+}
+
+.outlook-highlight {
+    background: #f9f6f0;
+    border: 1px solid #c9a84c;
+    border-left: 4px solid #c9a84c;
+    padding: 4mm 6mm;
+    margin: 4mm 0;
+}
+
+.outlook-highlight-label {
+    font-size: 7pt;
+    color: #c9a84c;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: bold;
+    margin-bottom: 1mm;
+}
+
+.outlook-highlight-value {
+    font-size: 14pt;
+    font-weight: bold;
+    color: #002446;
+}
+
+/* ============================================================
+   TABLES — SHARED
+   ============================================================ */
+table.wyn-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 4mm 0;
+    font-size: 8.5pt;
+}
+
+table.wyn-table th {
+    background: #002446;
+    color: #f9f6f0;
+    padding: 3mm 4mm;
+    text-align: left;
+    font-size: 7.5pt;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+table.wyn-table td {
+    padding: 3mm 4mm;
+    border-bottom: 1px solid #e5e7eb;
+    vertical-align: middle;
+}
+
+table.wyn-table tr:nth-child(even) td {
+    background: #f9f6f0;
+}
+
+.check-yes  { color: #22c55e; font-weight: bold; font-size: 11pt; }
+.check-no   { color: #ef4444; font-weight: bold; font-size: 11pt; }
+.check-warn { color: #f59e0b; font-weight: bold; font-size: 11pt; }
+
+/* ============================================================
+   PAGES 3–4 — PROPERTY INTELLIGENCE
+   ============================================================ */
+.prop-dim-box {
+    display: table;
+    width: 100%;
+    margin-bottom: 5mm;
+}
+
+.prop-dim-cell {
+    display: table-cell;
+    width: 33%;
+    background: #f9f6f0;
+    border: 1px solid #e5e7eb;
+    padding: 4mm;
+    text-align: center;
+}
+
+.prop-dim-label {
+    font-size: 7pt;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 2mm;
+}
+
+.prop-dim-value {
+    font-size: 13pt;
+    font-weight: bold;
+    color: #002446;
+}
+
+.prop-dim-sub {
+    font-size: 8pt;
+    color: #94a3b8;
+}
+
+.flag-box {
+    padding: 3mm 5mm;
+    margin: 2mm 0;
+    border-radius: 2px;
+    font-size: 8.5pt;
+}
+
+.flag-red    { background: #fef2f2; border-left: 4px solid #ef4444; color: #991b1b; }
+.flag-amber  { background: #fffbeb; border-left: 4px solid #f59e0b; color: #92400e; }
+.flag-green  { background: #f0fdf4; border-left: 4px solid #22c55e; color: #166534; }
+.flag-gray   { background: #f8fafc; border-left: 4px solid #94a3b8; color: #475569; }
+
+.buyout-callout {
+    background: #fffbeb;
+    border: 2px solid #f59e0b;
+    padding: 4mm 6mm;
+    margin: 4mm 0;
+    font-size: 8.5pt;
+    color: #92400e;
+}
+
+.buyout-callout strong {
+    font-size: 10pt;
+    display: block;
+    margin-bottom: 1mm;
+}
+
+/* ============================================================
+   PAGES 5–6 — MARKET ANALYSIS
+   ============================================================ */
+.market-chart-img {
+    width: 100%;
+    height: auto;
+    display: block;
+    margin: 4mm 0;
+}
+
+.dom-row {
+    display: table;
+    width: 100%;
+    margin: 3mm 0;
+}
+
+.dom-cell-label {
+    display: table-cell;
+    width: 40%;
+    font-size: 8.5pt;
+    color: #374151;
+    vertical-align: middle;
+}
+
+.dom-cell-value {
+    display: table-cell;
+    width: 30%;
+    font-size: 9pt;
+    font-weight: bold;
+    color: #002446;
+    vertical-align: middle;
+}
+
+.dom-cell-trend {
+    display: table-cell;
+    width: 30%;
+    font-size: 8pt;
+    vertical-align: middle;
+}
+
+.trend-up   { color: #f59e0b; }
+.trend-down { color: #22c55e; }
+.trend-flat { color: #94a3b8; }
+
+.confidence-box {
+    background: #f9f6f0;
+    border: 1px solid #e5e7eb;
+    padding: 4mm 6mm;
+    margin: 4mm 0;
+    font-size: 8.5pt;
+}
+
+.confidence-tier-label {
+    font-size: 10pt;
+    font-weight: bold;
+    color: #002446;
+    margin-bottom: 1mm;
+}
+
+/* ============================================================
+   PAGE 7 — COMPARABLE SALES
+   ============================================================ */
+.comp-note {
+    font-size: 7.5pt;
+    color: #94a3b8;
+    font-style: italic;
+    margin-top: 3mm;
+}
+
+/* ============================================================
+   PAGES 8–9 — PRO FORMA
+   ============================================================ */
+.proforma-section {
+    margin-bottom: 5mm;
+}
+
+.proforma-section-title {
+    font-size: 8pt;
+    font-weight: bold;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border-bottom: 1px solid #e5e7eb;
+    padding-bottom: 1mm;
+    margin-bottom: 3mm;
+}
+
+.proforma-row {
+    display: table;
+    width: 100%;
+    padding: 1.5mm 0;
+}
+
+.proforma-row-label {
+    display: table-cell;
+    font-size: 8.5pt;
+    color: #374151;
+}
+
+.proforma-row-indent {
+    display: table-cell;
+    font-size: 8.5pt;
+    color: #374151;
+    padding-left: 5mm;
+}
+
+.proforma-row-value {
+    display: table-cell;
+    font-size: 8.5pt;
+    color: #002446;
+    text-align: right;
+    font-weight: bold;
+}
+
+.proforma-total-row {
+    display: table;
+    width: 100%;
+    padding: 3mm 4mm;
+    background: #002446;
+    margin-top: 2mm;
+}
+
+.proforma-total-label {
+    display: table-cell;
+    font-size: 9pt;
+    font-weight: bold;
+    color: #f9f6f0;
+}
+
+.proforma-total-value {
+    display: table-cell;
+    font-size: 11pt;
+    font-weight: bold;
+    color: #c9a84c;
+    text-align: right;
+}
+
+.proforma-profit-box {
+    background: #f0fdf4;
+    border: 2px solid #22c55e;
+    padding: 4mm 6mm;
+    margin: 4mm 0;
+    display: table;
+    width: 100%;
+}
+
+.proforma-profit-box.loss {
+    background: #fef2f2;
+    border-color: #ef4444;
+}
+
+.proforma-profit-label {
+    display: table-cell;
+    font-size: 9pt;
+    font-weight: bold;
+    color: #374151;
+    vertical-align: middle;
+}
+
+.proforma-profit-value {
+    display: table-cell;
+    font-size: 16pt;
+    font-weight: bold;
+    color: #166534;
+    text-align: right;
+    vertical-align: middle;
+}
+
+.proforma-profit-value.loss {
+    color: #991b1b;
+}
+
+.proforma-roi {
+    font-size: 9pt;
+    color: #374151;
+    text-align: right;
+    margin-top: 2mm;
+}
+
+.rental-rent-table {
+    width: 100%;
+    margin: 4mm 0;
+}
+
+.rental-rent-row {
+    display: table;
+    width: 100%;
+    border-bottom: 1px solid #e5e7eb;
+    padding: 2mm 0;
+}
+
+.rental-rent-type  { display: table-cell; width: 15%; font-size: 8.5pt; font-weight: bold; color: #002446; }
+.rental-rent-curr  { display: table-cell; width: 25%; font-size: 8.5pt; }
+.rental-rent-cmhc  { display: table-cell; width: 25%; font-size: 8.5pt; color: #94a3b8; }
+.rental-rent-var   { display: table-cell; width: 35%; font-size: 8.5pt; text-align: right; }
+
+.var-positive { color: #22c55e; font-weight: bold; }
+.var-negative { color: #ef4444; font-weight: bold; }
+.var-neutral  { color: #94a3b8; }
+
+/* ============================================================
+   PAGE 10 — BLUEPRINT MATCH
+   ============================================================ */
+.blueprint-box {
+    display: table;
+    width: 100%;
+    border: 1px solid #c9a84c;
+    padding: 5mm;
+    margin: 4mm 0;
+}
+
+.blueprint-img-cell {
+    display: table-cell;
+    width: 35%;
+    vertical-align: top;
+    padding-right: 5mm;
+}
+
+.blueprint-img {
+    width: 100%;
+    height: auto;
+    border: 1px solid #e5e7eb;
+}
+
+.blueprint-img-placeholder {
+    width: 100%;
+    height: 40mm;
+    background: #f9f6f0;
+    border: 1px solid #e5e7eb;
+    display: block;
+}
+
+.blueprint-detail-cell {
+    display: table-cell;
+    vertical-align: top;
+}
+
+.blueprint-design-id {
+    font-size: 8pt;
+    color: #c9a84c;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 1mm;
+}
+
+.blueprint-design-name {
+    font-size: 13pt;
+    font-weight: bold;
+    color: #002446;
+    margin-bottom: 3mm;
+}
+
+.blueprint-saving {
+    background: #f9f6f0;
+    padding: 3mm 4mm;
+    margin: 2mm 0;
+    font-size: 8.5pt;
+    border-left: 3px solid #c9a84c;
+}
+
+.blueprint-disclaimer {
+    font-size: 7.5pt;
+    color: #94a3b8;
+    font-style: italic;
+    margin-top: 3mm;
+}
+
+/* ============================================================
+   PAGE 11 — WYNSTON OUTLOOK
+   ============================================================ */
+.outlook-layer-table {
+    width: 100%;
+    margin: 4mm 0;
+}
+
+.outlook-layer-row {
+    display: table;
+    width: 100%;
+    border-bottom: 1px solid #e5e7eb;
+    padding: 3mm 0;
+}
+
+.outlook-layer-name   { display: table-cell; width: 30%; font-size: 8.5pt; font-weight: bold; color: #002446; }
+.outlook-layer-signal { display: table-cell; width: 20%; font-size: 8.5pt; text-align: center; }
+.outlook-layer-weight { display: table-cell; width: 15%; font-size: 8.5pt; text-align: center; color: #94a3b8; }
+.outlook-layer-contrib{ display: table-cell; width: 20%; font-size: 8.5pt; text-align: center; font-weight: bold; color: #002446; }
+.outlook-layer-source { display: table-cell; width: 15%; font-size: 7pt; color: #94a3b8; text-align: right; }
+
+.outlook-psf-row {
+    display: table;
+    width: 100%;
+    margin: 4mm 0;
+}
+
+.outlook-psf-cell {
+    display: table-cell;
+    width: 33%;
+    text-align: center;
+    padding: 4mm;
+}
+
+.outlook-psf-cell.highlight {
+    background: #002446;
+    border-radius: 3px;
+}
+
+.outlook-psf-label {
+    font-size: 7pt;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 2mm;
+}
+
+.outlook-psf-cell.highlight .outlook-psf-label {
+    color: #c9a84c;
+}
+
+.outlook-psf-value {
+    font-size: 14pt;
+    font-weight: bold;
+    color: #002446;
+}
+
+.outlook-psf-cell.highlight .outlook-psf-value {
+    color: #f9f6f0;
+}
+
+.outlook-margin-row {
+    display: table;
+    width: 100%;
+    background: #f9f6f0;
+    padding: 3mm 5mm;
+    margin: 3mm 0;
+}
+
+.outlook-margin-label { display: table-cell; font-size: 8.5pt; color: #374151; }
+.outlook-margin-value { display: table-cell; font-size: 9pt; font-weight: bold; color: #002446; text-align: right; }
+.outlook-margin-delta { display: table-cell; font-size: 8.5pt; color: #22c55e; text-align: right; padding-left: 3mm; }
+
+/* ============================================================
+   PAGE 12 — RISK ANALYSIS
+   ============================================================ */
+.risk-item {
+    margin-bottom: 4mm;
+    padding: 3mm 5mm;
+    border-left: 3px solid #e5e7eb;
+    background: #f8fafc;
+}
+
+.risk-item.risk-active {
+    border-left-color: #f59e0b;
+    background: #fffbeb;
+}
+
+.risk-item.risk-critical {
+    border-left-color: #ef4444;
+    background: #fef2f2;
+}
+
+.risk-title {
+    font-size: 9pt;
+    font-weight: bold;
+    color: #002446;
+    margin-bottom: 1mm;
+}
+
+.risk-body {
+    font-size: 8pt;
+    color: #374151;
+    line-height: 1.5;
+}
+
+.risk-na {
+    font-size: 8pt;
+    color: #94a3b8;
+    font-style: italic;
+}
+
+/* ============================================================
+   BACK COVER
+   ============================================================ */
+.back-cover {
+    background-color: #002446;
+    color: #f9f6f0;
+    padding: 8mm 10mm;
+    position: relative;
+    width: 100%;
+}
+
+.back-cover-divider {
+    border-top: 1px solid rgba(255,255,255,0.15);
+    margin: 6mm 0;
+}
+
+.back-cover-agent-row {
+    display: table;
+    width: 100%;
+    margin-bottom: 6mm;
+}
+
+.back-cover-agent-img-cell {
+    display: table-cell;
+    width: 25%;
+    vertical-align: top;
+    padding-right: 6mm;
+}
+
+.back-cover-agent-img {
+    width: 100%;
+    border-radius: 3px;
+    border: 2px solid #c9a84c;
+}
+
+.back-cover-agent-img-placeholder {
+    width: 100%;
+    height: 32mm;
+    background: #0a3060;
+    border: 2px solid #c9a84c;
+    border-radius: 3px;
+    display: block;
+}
+
+.back-cover-agent-detail {
+    display: table-cell;
+    vertical-align: top;
+}
+
+.back-cover-agent-name {
+    font-size: 13pt;
+    font-weight: bold;
+    color: #c9a84c;
+    margin-bottom: 1mm;
+}
+
+.back-cover-agent-title {
+    font-size: 8pt;
+    color: #f9f6f0;
+    opacity: 0.8;
+    margin-bottom: 3mm;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.back-cover-agent-bio {
+    font-size: 8.5pt;
+    color: #f9f6f0;
+    opacity: 0.85;
+    line-height: 1.6;
+}
+
+.back-cover-contact {
+    font-size: 8.5pt;
+    color: #f9f6f0;
+    margin: 1.5mm 0;
+}
+
+.back-cover-contact-label {
+    color: #c9a84c;
+    font-weight: bold;
+    display: inline;
+}
+
+.back-cover-disclaimer {
+    font-size: 7pt;
+    color: #f9f6f0;
+    opacity: 0.45;
+    line-height: 1.6;
+    margin-top: 4mm;
+}
+
+.back-cover-sources {
+    font-size: 7pt;
+    color: #f9f6f0;
+    opacity: 0.55;
+    margin-top: 3mm;
+    line-height: 1.5;
+}
+
+.back-cover-footer {
+    position: absolute;
+    bottom: 8mm;
+    left: 16mm;
+    right: 16mm;
+    font-size: 7pt;
+    color: #c9a84c;
+    opacity: 0.6;
+    text-align: center;
+}
+
+.back-cover-gold-bar {
+    background-color: #c9a84c;
+    height: 6px;
+    width: 100%;
+    position: absolute;
+    bottom: 0;
+    left: 0;
+}
+
+/* ============================================================
+   UTILITY
+   ============================================================ */
+.text-right  { text-align: right; }
+.text-center { text-align: center; }
+.text-small  { font-size: 7.5pt; }
+.text-muted  { color: #94a3b8; }
+.mt-2 { margin-top: 2mm; }
+.mt-4 { margin-top: 4mm; }
+.mt-6 { margin-top: 6mm; }
+.mb-2 { margin-bottom: 2mm; }
+.mb-4 { margin-bottom: 4mm; }
+.bold { font-weight: bold; }
+.divider {
+    border: none;
+    border-top: 1px solid #e5e7eb;
+    margin: 4mm 0;
+}
+.gold-divider {
+    border: none;
+    border-top: 2px solid #c9a84c;
+    margin: 4mm 0;
+}
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+     PAGE 1 — COVER
+     ============================================================ -->
+<div class="page cover">
+    <div class="cover-top-bar"></div>
+    <div class="cover-inner">
+
+        <?php if (!empty($report_logo_path) && $subscription_tier === 'white_label'): ?>
+            <img src="<?= htmlspecialchars($report_logo_path) ?>" style="height:14mm; margin-bottom:4mm; display:block;">
+        <?php else: ?>
+            <div class="cover-logo">WYNSTON</div>
+            <div class="cover-logo-sub">Intelligent Navigator &nbsp;·&nbsp; W.I.N</div>
+        <?php endif; ?>
+
+        <div class="cover-report-title">Development Intelligence Report</div>
+
+        <div class="cover-address"><?= htmlspecialchars($address) ?></div>
+        <div class="cover-pid">PID: <?= htmlspecialchars($pid_formatted) ?> &nbsp;·&nbsp; Zoning: R1-1 &nbsp;·&nbsp; City of Vancouver</div>
+
+        <?php if (!empty($aerial_base64)): ?>
+            <img class="cover-aerial" src="data:image/jpeg;base64,<?= $aerial_base64 ?>">
+        <?php else: ?>
+            <div class="cover-aerial-placeholder">Aerial imagery unavailable</div>
+        <?php endif; ?>
+
+        <div class="cover-meta-row">
+            <span class="cover-meta-label">Prepared for:</span>
+            &nbsp;<?= htmlspecialchars($prepared_for) ?>
+        </div>
+        <div class="cover-meta-row">
+            <span class="cover-meta-label">Report ID:</span>
+            &nbsp;<?= htmlspecialchars($report_id) ?>
+        </div>
+        <div class="cover-meta-row">
+            <span class="cover-meta-label">Generated:</span>
+            &nbsp;<?= date('F j, Y') ?>
+        </div>
+        <div class="cover-meta-row">
+            <span class="cover-meta-label">Data as of:</span>
+            &nbsp;<?= htmlspecialchars($data_as_of) ?>
+        </div>
+
+        <div style="margin-top:5mm;">
+            <span class="cover-eligibility-badge badge-<?= $eligibility_badge_class ?>">
+                <?= htmlspecialchars($eligibility_label) ?>
+            </span>
+            <span class="cover-confidence-badge">
+                <?= htmlspecialchars($confidence_label) ?> Confidence
+            </span>
+        </div>
+
+    </div>
+    <div class="cover-footer">
+        CONFIDENTIAL — Prepared exclusively for <?= htmlspecialchars($prepared_for) ?>. For informational purposes only. Not financial or investment advice.
+    </div>
+</div>
+
+
+<!-- ============================================================
+     PAGE 2 — EXECUTIVE SUMMARY
+     ============================================================ -->
+<div class="page interior">
+    <div class="page-header">
+        <div class="page-header-left">
+            <div class="page-section-title">Executive Summary</div>
+            <div class="page-section-sub"><?= htmlspecialchars($address) ?></div>
+        </div>
+        <div class="page-header-right">
+            WYNSTON W.I.N &nbsp;·&nbsp; Report <?= htmlspecialchars($report_id) ?>
+        </div>
+    </div>
+
+    <div style="margin-bottom:4mm;">
+        <span class="cover-eligibility-badge badge-<?= $eligibility_badge_class ?>" style="font-size:9pt;">
+            <?= htmlspecialchars($eligibility_label) ?>
+        </span>
+        <span class="cover-confidence-badge">
+            <?= htmlspecialchars($confidence_label) ?> Confidence
+        </span>
+        <?php if ($comp_count > 0): ?>
+            <span class="text-muted text-small" style="margin-left:3mm;">Based on <?= $comp_count ?> comparable sale<?= $comp_count !== 1 ? 's' : '' ?></span>
+        <?php endif; ?>
+    </div>
+
+    <div class="exec-kpi-row">
+        <div class="exec-kpi-cell">
+            <div class="exec-kpi-label">Max Units</div>
+            <div class="exec-kpi-value"><?= $max_units ?></div>
+            <div class="exec-kpi-sub"><?= htmlspecialchars($unit_type_label) ?></div>
+        </div>
+        <div class="exec-kpi-cell">
+            <div class="exec-kpi-label">Buildable Area</div>
+            <div class="exec-kpi-value"><?= number_format($buildable_sqft) ?></div>
+            <div class="exec-kpi-sub">sqft (<?= number_format($buildable_sqm) ?> m²)</div>
+        </div>
+        <div class="exec-kpi-cell">
+            <div class="exec-kpi-label">Exit Value</div>
+            <div class="exec-kpi-value">$<?= number_format($exit_value) ?></div>
+            <div class="exec-kpi-sub"><?= $pro_forma_path === 'rental' ? 'Annual NOI' : 'Strata sale' ?></div>
+        </div>
+        <div class="exec-kpi-cell">
+            <div class="exec-kpi-label">Est. Profit</div>
+            <div class="exec-kpi-value <?= $profit >= 0 ? 'green' : 'red' ?>">$<?= number_format($profit) ?></div>
+            <div class="exec-kpi-sub">Before tax</div>
+        </div>
+        <div class="exec-kpi-cell">
+            <div class="exec-kpi-label">ROI</div>
+            <div class="exec-kpi-value <?= $roi >= 0 ? 'green' : 'red' ?>"><?= number_format($roi, 1) ?>%</div>
+            <div class="exec-kpi-sub">Return on cost</div>
+        </div>
+    </div>
+
+    <?php if (!empty($outlook_pct)): ?>
+    <div class="outlook-highlight">
+        <div class="outlook-highlight-label">Wynston Outlook — 12-Month Projection</div>
+        <div class="outlook-highlight-value">
+            <?= $outlook_pct >= 0 ? '+' : '' ?><?= number_format($outlook_pct, 1) ?>%
+            &nbsp;·&nbsp; $<?= number_format($outlook_psf) ?>/sqft projected
+        </div>
+        <div class="text-small text-muted mt-2">
+            Current: $<?= number_format($current_sold_psf) ?>/sqft &nbsp;·&nbsp;
+            Projected margin improvement: $<?= number_format($projected_margin - $current_margin) ?>/sqft
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <div class="exec-next-step">
+        <div class="exec-next-step-label">Recommended Next Step</div>
+        <?= htmlspecialchars($recommended_next_step) ?>
+    </div>
+
+    <?php if ($confidence_label === 'Indicative'): ?>
+    <div class="flag-box flag-amber mt-4">
+        <strong>Indicative Confidence:</strong> Fewer than 2 comparable sales available in this neighbourhood for the selected period.
+        Pro forma figures use Metro Vancouver benchmarks. Upload current REBGV data to improve accuracy.
+    </div>
+    <?php endif; ?>
+
+    <div class="page-footer">
+        <div class="page-footer-left">Wynston Development Intelligence Report &nbsp;·&nbsp; <?= htmlspecialchars($address) ?></div>
+        <div class="page-footer-right">Page 2</div>
+    </div>
+</div>
+
+
+<!-- ============================================================
+     PAGE 3 — PROPERTY INTELLIGENCE
+     ============================================================ -->
+<div class="page interior">
+    <div class="page-header">
+        <div class="page-header-left">
+            <div class="page-section-title">Property Intelligence</div>
+            <div class="page-section-sub">Lot Dimensions &amp; Zoning Eligibility</div>
+        </div>
+        <div class="page-header-right">WYNSTON W.I.N &nbsp;·&nbsp; Report <?= htmlspecialchars($report_id) ?></div>
+    </div>
+
+    <!-- Dimensions -->
+    <div class="prop-dim-box">
+        <div class="prop-dim-cell">
+            <div class="prop-dim-label">Frontage</div>
+            <div class="prop-dim-value"><?= number_format($lot_width_ft, 1) ?> ft</div>
+            <div class="prop-dim-sub"><?= number_format($lot_width_m, 2) ?> m</div>
+        </div>
+        <div class="prop-dim-cell" style="border-left:1px solid #e5e7eb; border-right:1px solid #e5e7eb;">
+            <div class="prop-dim-label">Depth</div>
+            <div class="prop-dim-value"><?= number_format($lot_depth_ft, 1) ?> ft</div>
+            <div class="prop-dim-sub"><?= number_format($lot_depth_m, 2) ?> m</div>
+        </div>
+        <div class="prop-dim-cell">
+            <div class="prop-dim-label">Lot Area</div>
+            <div class="prop-dim-value"><?= number_format($lot_area_sqft) ?> sqft</div>
+            <div class="prop-dim-sub"><?= number_format($lot_area_sqm) ?> m²</div>
+        </div>
+    </div>
+
+    <?php if ($lot_width_m >= 14.5 && $lot_width_m < 15.1): ?>
+    <div class="buyout-callout">
+        <strong>⚡ Neighbour Buyout Opportunity</strong>
+        This lot is <?= number_format((15.1 - $lot_width_m), 2) ?>m (<?= number_format((15.1 - $lot_width_m) / 0.3048, 1) ?>ft) below the 6-unit eligibility threshold.
+        Acquiring the adjacent property could unlock 6-unit entitlement and significantly increase project value.
+    </div>
+    <?php endif; ?>
+
+    <!-- Eligibility table -->
+    <table class="wyn-table mt-4">
+        <thead>
+            <tr>
+                <th>Unit Count</th>
+                <th>Frontage Req.</th>
+                <th>Area Req.</th>
+                <th>Transit Req.</th>
+                <th>Lane Req.</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>Duplex / 3-Unit</strong></td>
+                <td>24.6 ft (7.5 m)</td>
+                <td>2,153 sqft (200 m²)</td>
+                <td>Not required</td>
+                <td>Required</td>
+                <td>
+                    <?php if ($lot_width_m >= 7.5 && $lot_area_sqm >= 200 && $lane_access): ?>
+                        <span class="check-yes">✓</span>
+                    <?php elseif ($lot_width_m >= 7.5 && $lot_area_sqm >= 200): ?>
+                        <span class="check-warn">~</span> No lane
+                    <?php else: ?>
+                        <span class="check-no">✗</span>
+                    <?php endif; ?>
+                </td>
+            </tr>
+            <tr>
+                <td><strong>4-Unit</strong></td>
+                <td>32.8 ft (10.0 m)</td>
+                <td>3,294 sqft (306 m²)</td>
+                <td>Not required</td>
+                <td>Required</td>
+                <td>
+                    <?php if ($lot_width_m >= 10.0 && $lot_area_sqm >= 306 && $lane_access): ?>
+                        <span class="check-yes">✓</span>
+                    <?php elseif ($lot_width_m >= 10.0 && $lot_area_sqm >= 306): ?>
+                        <span class="check-warn">~</span> No lane
+                    <?php else: ?>
+                        <span class="check-no">✗</span>
+                    <?php endif; ?>
+                </td>
+            </tr>
+            <tr>
+                <td><strong>6-Unit (Strata)</strong></td>
+                <td>49.5 ft (15.1 m)</td>
+                <td>5,995 sqft (557 m²)</td>
+                <td>Required (400m)</td>
+                <td>Required</td>
+                <td>
+                    <?php if ($lot_width_m >= 15.1 && $lot_area_sqm >= 557 && $transit_proximate && $lane_access): ?>
+                        <span class="check-yes">✓</span>
+                    <?php elseif ($lot_width_m >= 15.1 && $lot_area_sqm >= 557 && !$transit_proximate): ?>
+                        <span class="check-warn">~</span> No transit
+                    <?php else: ?>
+                        <span class="check-no">✗</span>
+                    <?php endif; ?>
+                </td>
+            </tr>
+            <tr>
+                <td><strong>8-Unit (Rental)</strong></td>
+                <td>49.5 ft (15.1 m)</td>
+                <td>5,995 sqft (557 m²)</td>
+                <td>Required (400m)</td>
+                <td>Required</td>
+                <td>
+                    <?php if ($lot_width_m >= 15.1 && $lot_area_sqm >= 557 && $transit_proximate && $lane_access): ?>
+                        <span class="check-yes">✓</span>
+                    <?php elseif ($lot_width_m >= 15.1 && $lot_area_sqm >= 557 && !$transit_proximate): ?>
+                        <span class="check-warn">~</span> No transit
+                    <?php else: ?>
+                        <span class="check-no">✗</span>
+                    <?php endif; ?>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="page-footer">
+        <div class="page-footer-left">Wynston Development Intelligence Report &nbsp;·&nbsp; <?= htmlspecialchars($address) ?></div>
+        <div class="page-footer-right">Page 3</div>
+    </div>
+</div>
+
+
+<!-- ============================================================
+     PAGE 4 — PROPERTY INTELLIGENCE (continued)
+     ============================================================ -->
+<div class="page interior">
+    <div class="page-header">
+        <div class="page-header-left">
+            <div class="page-section-title">Property Intelligence</div>
+            <div class="page-section-sub">Site Conditions &amp; Constraints</div>
+        </div>
+        <div class="page-header-right">WYNSTON W.I.N &nbsp;·&nbsp; Report <?= htmlspecialchars($report_id) ?></div>
+    </div>
+
+    <!-- FSR + Buildable Area -->
+    <table class="wyn-table">
+        <thead><tr><th>Path</th><th>FSR</th><th>Buildable Area (sqft)</th><th>Buildable Area (m²)</th><th>Parking Required</th></tr></thead>
+        <tbody>
+            <tr>
+                <td><strong>Strata (sell units)</strong></td>
+                <td>0.70</td>
+                <td><?= number_format($lot_area_sqm * 0.70 * 10.764) ?> sqft</td>
+                <td><?= number_format($lot_area_sqm * 0.70) ?> m²</td>
+                <td><?= $transit_proximate ? '0 stalls (transit zone)' : number_format($max_units * 0.5, 1) . ' stalls' ?></td>
+            </tr>
+            <tr>
+                <td><strong>Rental (hold &amp; rent)</strong></td>
+                <td>1.00</td>
+                <td><?= number_format($lot_area_sqm * 1.00 * 10.764) ?> sqft</td>
+                <td><?= number_format($lot_area_sqm * 1.00) ?> m²</td>
+                <td><?= $transit_proximate ? '0 stalls (transit zone)' : number_format($max_units * 0.5, 1) . ' stalls' ?></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <!-- Site conditions -->
+    <div class="mt-4">
+        <div class="proforma-section-title">Site Conditions</div>
+
+        <div class="flag-box <?= $lane_access ? 'flag-green' : 'flag-amber' ?> mt-2">
+            <?= $lane_access ? '✓ Lane access confirmed' : '⚠ No lane access detected — may affect eligibility for 4+ unit builds' ?>
+        </div>
+
+        <div class="flag-box <?= $transit_proximate ? 'flag-green' : 'flag-gray' ?> mt-2">
+            <?= $transit_proximate
+                ? '✓ Transit proximate — within 400m of Frequent Transit Network stop. Parking requirement: 0 stalls.'
+                : '○ Outside 400m transit zone — parking required at 0.5 stalls per unit for 6+ unit builds.' ?>
+        </div>
+
+        <?php if (!empty($nearest_stop_name)): ?>
+        <div class="flag-box flag-gray mt-2">
+            Nearest FTN stop: <strong><?= htmlspecialchars($nearest_stop_name) ?></strong>
+            <?php if (!empty($nearest_stop_dist_m)): ?>
+                &nbsp;·&nbsp; <?= number_format($nearest_stop_dist_m) ?>m away
+            <?php endif; ?>
+        </div>
+        <?php endif; ?>
+    </div>
+
+    <!-- Constraint flags -->
+    <div class="mt-4">
+        <div class="proforma-section-title">Constraint Flags</div>
+
+        <?php if ($heritage_category === 'none'): ?>
+            <div class="flag-box flag-green mt-2">✓ No heritage designation on record</div>
+        <?php elseif ($heritage_category === 'A' || $heritage_category === 'B'): ?>
+            <div class="flag-box flag-red mt-2">
+                ⛔ Heritage Category <?= $heritage_category ?> — A Heritage Revitalization Agreement (HRA) may be required.
+                Expect significant permit delays. Consult a heritage professional before proceeding.
+            </div>
+        <?php elseif ($heritage_category === 'C'): ?>
+            <div class="flag-box flag-amber mt-2">
+                ⚠ Heritage Category C — Heritage inspection required prior to permit application.
+            </div>
+        <?php endif; ?>
+
+        <?php if ($peat_zone): ?>
+            <div class="flag-box flag-amber mt-2">
+                ⚠ Peat zone detected — Helical pile foundation likely required.
+                $150,000 contingency has been added to all pro forma calculations.
+                Commission a geotechnical report before purchase.
+            </div>
+        <?php else: ?>
+            <div class="flag-box flag-green mt-2">✓ No peat zone flag on record</div>
+        <?php endif; ?>
+
+        <?php if (!empty($covenant_present) && $covenant_present): ?>
+            <div class="flag-box flag-amber mt-2">
+                ⚠ Title encumbrance detected — Covenant registered: <?= htmlspecialchars($covenant_types ?? 'Type unknown') ?>.
+                <?php if (!empty($easement_present) && $easement_present): ?>
+                    Easement registered: <?= htmlspecialchars($easement_types ?? 'Type unknown') ?>.
+                <?php endif; ?>
+                Contact Wynston or obtain a full title search before proceeding.
+            </div>
+        <?php else: ?>
+            <div class="flag-box flag-green mt-2">✓ No covenant or easement flags on record</div>
+        <?php endif; ?>
+
+        <?php if ($has_active_permit): ?>
+            <div class="flag-box flag-amber mt-2">
+                ⚠ Active building permit on record — Development may already be in progress on this property.
+            </div>
+        <?php endif; ?>
+    </div>
+
+    <div class="page-footer">
+        <div class="page-footer-left">Wynston Development Intelligence Report &nbsp;·&nbsp; <?= htmlspecialchars($address) ?></div>
+        <div class="page-footer-right">Page 4</div>
+    </div>
+</div>
+
+
+<!-- ============================================================
+     PAGE 5 — MARKET ANALYSIS
+     ============================================================ -->
+<div class="page interior">
+    <div class="page-header">
+        <div class="page-header-left">
+            <div class="page-section-title">Market Analysis</div>
+            <div class="page-section-sub"><?= htmlspecialchars($neighbourhood_display) ?> &nbsp;·&nbsp; <?= htmlspecialchars($data_as_of) ?></div>
+        </div>
+        <div class="page-header-right">WYNSTON W.I.N &nbsp;·&nbsp; Report <?= htmlspecialchars($report_id) ?></div>
+    </div>
+
+    <!-- $/sqft three-number story -->
+    <div class="outlook-psf-row">
+        <div class="outlook-psf-cell">
+            <div class="outlook-psf-label">Build Cost</div>
+            <div class="outlook-psf-value">$<?= number_format($build_cost_psf) ?></div>
+            <div class="text-small text-muted">/sqft &nbsp;·&nbsp; current</div>
+        </div>
+        <div class="outlook-psf-cell">
+            <div class="outlook-psf-label">Finished Sale Price</div>
+            <div class="outlook-psf-value">$<?= number_format($current_sold_psf) ?></div>
+            <div class="text-small text-muted">/sqft &nbsp;·&nbsp; <?= htmlspecialchars($data_as_of) ?></div>
+        </div>
+        <div class="outlook-psf-cell highlight">
+            <div class="outlook-psf-label">Wynston Outlook</div>
+            <div class="outlook-psf-value">
+                <?php if (!empty($outlook_psf)): ?>
+                    $<?= number_format($outlook_psf) ?>
+                <?php else: ?>
+                    —
+                <?php endif; ?>
+            </div>
+            <div class="text-small" style="color:#c9a84c;">/sqft &nbsp;·&nbsp; 12-month projection</div>
+        </div>
+    </div>
+
+    <!-- Bar chart image -->
+    <?php if (!empty($chart_base64)): ?>
+        <img class="market-chart-img" src="data:image/png;base64,<?= $chart_base64 ?>">
+    <?php endif; ?>
+
+    <!-- Current margin -->
+    <div class="outlook-margin-row mt-4">
+        <div class="outlook-margin-label">Current margin (sold − build)</div>
+        <div class="outlook-margin-value">$<?= number_format($current_margin) ?>/sqft</div>
+        <?php if (!empty($projected_margin)): ?>
+        <div class="outlook-margin-delta">
+            Projected: $<?= number_format($projected_margin) ?>/sqft
+            (<?= $projected_margin >= $current_margin ? '▲' : '▼' ?>
+            $<?= number_format(abs($projected_margin - $current_margin)) ?>/sqft)
+        </div>
+        <?php endif; ?>
+    </div>
+
+    <!-- Confidence box -->
+    <div class="confidence-box mt-4">
+        <div class="confidence-tier-label"><?= htmlspecialchars($confidence_label) ?> Confidence</div>
+        <div class="text-small">
+            <?php if ($confidence_label === 'High'): ?>
+                Based on <?= $comp_count ?> comparable sales in <?= htmlspecialchars($neighbourhood_display) ?> — REBGV MLS data, new builds 2024+.
+                Local neighbourhood data used for all calculations.
+            <?php elseif ($confidence_label === 'Moderate'): ?>
+                Based on <?= $comp_count ?> comparable sale<?= $comp_count !== 1 ? 's' : '' ?> in <?= htmlspecialchars($neighbourhood_display) ?>.
+                Some figures supplemented with Metro Vancouver benchmarks.
+            <?php else: ?>
+                Fewer than 2 comparable sales available in this neighbourhood.
+                Pro forma uses Metro Vancouver benchmarks. Upload current REBGV data to improve accuracy.
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <div class="page-footer">
+        <div class="page-footer-left">Wynston Development Intelligence Report &nbsp;·&nbsp; <?= htmlspecialchars($address) ?></div>
+        <div class="page-footer-right">Page 5</div>
+    </div>
+</div>
+
+
+<!-- ============================================================
+     PAGE 6 — MARKET ANALYSIS (Days on Market)
+     ============================================================ -->
+<div class="page interior">
+    <div class="page-header">
+        <div class="page-header-left">
+            <div class="page-section-title">Market Analysis</div>
+            <div class="page-section-sub">Days on Market &amp; Velocity Signals</div>
+        </div>
+        <div class="page-header-right">WYNSTON W.I.N &nbsp;·&nbsp; Report <?= htmlspecialchars($report_id) ?></div>
+    </div>
+
+    <table class="wyn-table">
+        <thead>
+            <tr>
+                <th>Property Type</th>
+                <th>Current DOM</th>
+                <th>vs Last Month</th>
+                <th>Signal</th>
+            </tr>
+        </thead>
+        <tbody>
+            <?php foreach ($dom_data as $dtype => $ddata): ?>
+            <tr>
+                <td><strong><?= htmlspecialchars(ucfirst($dtype)) ?></strong></td>
+                <td><?= $ddata['current'] !== null ? $ddata['current'] . ' days' : '—' ?></td>
+                <td>
+                    <?php if ($ddata['current'] !== null && $ddata['previous'] !== null): ?>
+                        <?= $ddata['diff'] < 0 ? '↓ ' . abs($ddata['diff']) . ' days faster' : ($ddata['diff'] > 0 ? '↑ ' . $ddata['diff'] . ' days slower' : '— Stable') ?>
+                    <?php else: ?>
+                        —
+                    <?php endif; ?>
+                </td>
+                <td class="<?= $ddata['arrow_class'] ?>">
+                    <?= htmlspecialchars($ddata['label']) ?>
+                </td>
+            </tr>
+            <?php endforeach; ?>
+        </tbody>
+    </table>
+
+    <div class="flag-box flag-gray mt-4">
+        <strong>How to read DOM:</strong> Falling days on market indicates increasing buyer demand and seller leverage.
+        Rising DOM indicates softening demand. Wynston tracks duplex DOM most closely as the primary exit metric for multiplex builders.
+    </div>
+
+    <!-- HPI note if available -->
+    <?php if (!empty($hpi_yoy)): ?>
+    <div class="outlook-margin-row mt-4">
+        <div class="outlook-margin-label"><?= htmlspecialchars($neighbourhood_display) ?> HPI Year-over-Year</div>
+        <div class="outlook-margin-value <?= $hpi_yoy >= 0 ? 'green' : 'red' ?>">
+            <?= $hpi_yoy >= 0 ? '+' : '' ?><?= number_format($hpi_yoy, 1) ?>%
+        </div>
+        <div class="outlook-margin-delta">vs Metro Vancouver: <?= !is_null($hpi_vs_metro) ? (($hpi_vs_metro >= 0 ? '+' : '') . number_format((float)$hpi_vs_metro, 1) . '%') : '—' ?></div>
+    </div>
+    <?php endif; ?>
+
+    <div class="mt-4">
+        <div class="proforma-section-title">Data Sources</div>
+        <div class="text-small text-muted mt-2">
+            Market data sourced from REBGV MLS — new builds only (Year Built 2024+).
+            Days on market figures from <?= htmlspecialchars($neighbourhood_display) ?> neighbourhood HPI data.
+            <?php if ($confidence_label !== 'High'): ?>
+                Metro Vancouver averages used where local comparable sales are insufficient.
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <div class="page-footer">
+        <div class="page-footer-left">Wynston Development Intelligence Report &nbsp;·&nbsp; <?= htmlspecialchars($address) ?></div>
+        <div class="page-footer-right">Page 6</div>
+    </div>
+</div>
+
+
+<!-- ============================================================
+     PAGE 7 — COMPARABLE SALES
+     ============================================================ -->
+<div class="page interior">
+    <div class="page-header">
+        <div class="page-header-left">
+            <div class="page-section-title">Comparable Sales</div>
+            <div class="page-section-sub">New Builds 2024+ &nbsp;·&nbsp; <?= htmlspecialchars($neighbourhood_display) ?></div>
+        </div>
+        <div class="page-header-right">WYNSTON W.I.N &nbsp;·&nbsp; Report <?= htmlspecialchars($report_id) ?></div>
+    </div>
+
+    <?php if (!empty($comps)): ?>
+    <table class="wyn-table">
+        <thead>
+            <tr>
+                <th>Address</th>
+                <th>Sale Date</th>
+                <th>Sqft</th>
+                <th>$/sqft</th>
+                <th>DOM</th>
+                <th>Type</th>
+                <th>Source</th>
+            </tr>
+        </thead>
+        <tbody>
+            <?php foreach ($comps as $comp): ?>
+            <tr>
+                <td><?= htmlspecialchars($comp['address'] ?? '—') ?></td>
+                <td><?= !empty($comp['data_month']) ? date('M Y', strtotime($comp['data_month'])) : '—' ?></td>
+                <td><?= !empty($comp['sqft']) ? number_format($comp['sqft']) : '—' ?></td>
+                <td>$<?= !empty($comp['price_per_sqft']) ? number_format($comp['price_per_sqft']) : number_format($current_sold_psf) ?></td>
+                <td><?= !empty($comp['days_on_market']) ? $comp['days_on_market'] . ' days' : '—' ?></td>
+                <td><?= htmlspecialchars(ucfirst($comp['csv_type'] ?? '—')) ?></td>
+                <td class="text-small text-muted">
+                    <?= $comp['is_local'] ? htmlspecialchars($neighbourhood_display) : 'Adjacent area' ?>
+                </td>
+            </tr>
+            <?php endforeach; ?>
+        </tbody>
+    </table>
+
+    <?php if ($comps_expanded): ?>
+        <div class="comp-note">
+            Note: Fewer than 3 comparable sales available in <?= htmlspecialchars($neighbourhood_display) ?>.
+            Adjacent neighbourhood data included and noted above.
+        </div>
+    <?php endif; ?>
+
+    <?php else: ?>
+    <div class="flag-box flag-gray mt-4">
+        No comparable sales data available for this neighbourhood yet.
+        Pro forma uses Metro Vancouver benchmarks ($<?= number_format($current_sold_psf) ?>/sqft).
+        Upload REBGV monthly data via the W.I.N admin panel to populate comparable sales.
+    </div>
+    <?php endif; ?>
+
+    <div class="mt-4">
+        <div class="proforma-section-title">Methodology</div>
+        <div class="text-small text-muted mt-2">
+            Comparable sales filtered to: R1-1 zoned lots, Year Built 2024 or later, duplex and multiplex property types.
+            Source: REBGV MLS data uploaded to Wynston W.I.N. This is not an appraisal.
+        </div>
+    </div>
+
+    <div class="page-footer">
+        <div class="page-footer-left">Wynston Development Intelligence Report &nbsp;·&nbsp; <?= htmlspecialchars($address) ?></div>
+        <div class="page-footer-right">Page 7</div>
+    </div>
+</div>
+
+
+<!-- ============================================================
+     PAGE 8 — PRO FORMA (Strata or Rental)
+     ============================================================ -->
+<div class="page interior">
+    <div class="page-header">
+        <div class="page-header-left">
+            <div class="page-section-title">Development Pro Forma</div>
+            <div class="page-section-sub">
+                <?= $pro_forma_path === 'rental' ? 'Rental / Hold Path &nbsp;·&nbsp; 1.00 FSR' : 'Strata / Sell Path &nbsp;·&nbsp; 0.70 FSR' ?>
+                &nbsp;·&nbsp; <?= $max_units ?>-Unit <?= htmlspecialchars($unit_type_label) ?>
+            </div>
+        </div>
+        <div class="page-header-right">WYNSTON W.I.N &nbsp;·&nbsp; Report <?= htmlspecialchars($report_id) ?></div>
+    </div>
+
+    <!-- COSTS -->
+    <div class="proforma-section">
+        <div class="proforma-section-title">Project Costs</div>
+
+        <div class="proforma-row">
+            <div class="proforma-row-label">Land cost (BC Assessment <?= $assessment_year ?>)</div>
+            <div class="proforma-row-value">$<?= number_format($assessed_land_value) ?></div>
+        </div>
+        <hr class="divider">
+
+        <div class="proforma-row">
+            <div class="proforma-row-label">Hard construction</div>
+            <div class="proforma-row-value"></div>
+        </div>
+        <div class="proforma-row">
+            <div class="proforma-row-indent">Build cost (<?= number_format($buildable_sqft) ?> sqft × $<?= number_format($build_cost_psf) ?>/sqft)</div>
+            <div class="proforma-row-value">$<?= number_format($hard_build_cost) ?></div>
+        </div>
+        <?php if ($pro_forma_path === 'rental' && $density_bonus_cost > 0): ?>
+        <div class="proforma-row">
+            <div class="proforma-row-indent">Density bonus (bonus FSR area × $<?= number_format($density_bonus_psf) ?>/sqft)</div>
+            <div class="proforma-row-value">$<?= number_format($density_bonus_cost) ?></div>
+        </div>
+        <?php endif; ?>
+        <div class="proforma-row">
+            <div class="proforma-row-indent">City-wide DCL ($18.45/sqft)</div>
+            <div class="proforma-row-value">$<?= number_format($dcl_city) ?></div>
+        </div>
+        <div class="proforma-row">
+            <div class="proforma-row-indent">Utilities DCL ($2.95/sqft)</div>
+            <div class="proforma-row-value">$<?= number_format($dcl_utilities) ?></div>
+        </div>
+        <div class="proforma-row">
+            <div class="proforma-row-indent">Permit fees ($13.70 per $1,000 construction value)</div>
+            <div class="proforma-row-value">$<?= number_format($permit_fees) ?></div>
+        </div>
+        <?php if ($peat_zone): ?>
+        <div class="proforma-row">
+            <div class="proforma-row-indent">Peat zone contingency (helical piles)</div>
+            <div class="proforma-row-value">$150,000</div>
+        </div>
+        <?php endif; ?>
+
+        <div class="proforma-total-row">
+            <div class="proforma-total-label">Total Project Cost</div>
+            <div class="proforma-total-value">$<?= number_format($total_project_cost) ?></div>
+        </div>
+    </div>
+
+    <?php if ($pro_forma_path === 'strata'): ?>
+    <!-- STRATA EXIT -->
+    <div class="proforma-section mt-4">
+        <div class="proforma-section-title">Exit Value — Strata Sale</div>
+        <div class="proforma-row">
+            <div class="proforma-row-label">Saleable area (<?= number_format($buildable_sqft) ?> sqft × 85%)</div>
+            <div class="proforma-row-value"><?= number_format($saleable_sqft) ?> sqft</div>
+        </div>
+        <div class="proforma-row">
+            <div class="proforma-row-label">Avg sold $/sqft (<?= htmlspecialchars($confidence_label) ?> confidence)</div>
+            <div class="proforma-row-value">$<?= number_format($current_sold_psf) ?>/sqft</div>
+        </div>
+        <div class="proforma-row">
+            <div class="proforma-row-label">Total exit value</div>
+            <div class="proforma-row-value">$<?= number_format($exit_value) ?></div>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <div class="proforma-profit-box <?= $profit < 0 ? 'loss' : '' ?>">
+        <div class="proforma-profit-label">
+            Estimated Profit<br>
+            <span class="text-small text-muted">Before tax, financing costs, and professional fees</span>
+        </div>
+        <div class="proforma-profit-value <?= $profit < 0 ? 'loss' : '' ?>">
+            <?= $profit < 0 ? '-' : '' ?>$<?= number_format(abs($profit)) ?>
+        </div>
+    </div>
+    <div class="proforma-roi">
+        Return on cost: <strong><?= number_format($roi, 1) ?>%</strong>
+        &nbsp;·&nbsp; Profit per unit: <strong>$<?= number_format($profit / max($max_units, 1)) ?></strong>
+    </div>
+
+    <div class="text-small text-muted mt-4">
+        Pro forma uses <?= htmlspecialchars($neighbourhood_display) ?> market data as of <?= htmlspecialchars($data_as_of) ?>.
+        <?= $confidence_label !== 'High' ? 'Metro Vancouver benchmarks used where local data is unavailable. ' : '' ?>
+        Verify all figures with your financial advisor before proceeding.
+    </div>
+
+    <div class="page-footer">
+        <div class="page-footer-left">Wynston Development Intelligence Report &nbsp;·&nbsp; <?= htmlspecialchars($address) ?></div>
+        <div class="page-footer-right">Page 8</div>
+    </div>
+</div>
+
+
+<!-- ============================================================
+     PAGE 9 — PRO FORMA continued (Rental NOI or Unit Mix)
+     ============================================================ -->
+<div class="page interior">
+    <div class="page-header">
+        <div class="page-header-left">
+            <div class="page-section-title">Development Pro Forma</div>
+            <div class="page-section-sub">
+                <?= $pro_forma_path === 'rental' ? 'Rental Income Projection' : 'Unit Mix &amp; Bedroom Analysis' ?>
+            </div>
+        </div>
+        <div class="page-header-right">WYNSTON W.I.N &nbsp;·&nbsp; Report <?= htmlspecialchars($report_id) ?></div>
+    </div>
+
+    <?php if ($pro_forma_path === 'rental'): ?>
+    <!-- RENTAL NOI -->
+    <div class="proforma-section">
+        <div class="proforma-section-title">Rental Income by Bedroom Type</div>
+        <div class="rental-rent-table">
+            <div class="rental-rent-row" style="font-weight:bold; font-size:7.5pt; color:#94a3b8; text-transform:uppercase;">
+                <div class="rental-rent-type">Type</div>
+                <div class="rental-rent-curr">Current Market</div>
+                <div class="rental-rent-cmhc">CMHC Benchmark</div>
+                <div class="rental-rent-var">Variance</div>
+            </div>
+            <?php foreach ($rental_rows as $rrow): ?>
+            <div class="rental-rent-row">
+                <div class="rental-rent-type"><?= htmlspecialchars($rrow['type']) ?></div>
+                <div class="rental-rent-curr">$<?= number_format($rrow['current_rent']) ?>/mo</div>
+                <div class="rental-rent-cmhc">$<?= number_format($rrow['cmhc_rent']) ?>/mo</div>
+                <div class="rental-rent-var">
+                    <?php
+                        $var = $rrow['cmhc_rent'] > 0
+                            ? (($rrow['current_rent'] - $rrow['cmhc_rent']) / $rrow['cmhc_rent']) * 100
+                            : 0;
+                        $var_class = $var > 2 ? 'var-positive' : ($var < -2 ? 'var-negative' : 'var-neutral');
+                        $var_label = $var > 2 ? 'Above benchmark' : ($var < -2 ? 'Below benchmark' : 'At benchmark');
+                    ?>
+                    <span class="<?= $var_class ?>">
+                        <?= $var >= 0 ? '+' : '' ?><?= number_format($var, 1) ?>% — <?= $var_label ?>
+                    </span>
+                </div>
+            </div>
+            <?php endforeach; ?>
+        </div>
+    </div>
+
+    <div class="proforma-section mt-4">
+        <div class="proforma-section-title">Annual Income Summary</div>
+        <div class="proforma-row">
+            <div class="proforma-row-label">Gross monthly income</div>
+            <div class="proforma-row-value">$<?= number_format($gross_monthly_income) ?></div>
+        </div>
+        <div class="proforma-row">
+            <div class="proforma-row-label">Annual gross income</div>
+            <div class="proforma-row-value">$<?= number_format($gross_annual_income) ?></div>
+        </div>
+        <div class="proforma-row">
+            <div class="proforma-row-label">Less 5% vacancy allowance</div>
+            <div class="proforma-row-value">−$<?= number_format($gross_annual_income * 0.05) ?></div>
+        </div>
+        <div class="proforma-row">
+            <div class="proforma-row-label">Less 25% operating expenses</div>
+            <div class="proforma-row-value">−$<?= number_format($gross_annual_income * 0.95 * 0.25) ?></div>
+        </div>
+
+        <div class="proforma-total-row">
+            <div class="proforma-total-label">Net Operating Income (NOI)</div>
+            <div class="proforma-total-value">$<?= number_format($noi) ?>/year</div>
+        </div>
+    </div>
+
+    <?php else: ?>
+    <!-- STRATA UNIT MIX -->
+    <div class="proforma-section">
+        <div class="proforma-section-title">Unit Mix (Vancouver 2026 Bedroom Rules)</div>
+        <table class="wyn-table">
+            <thead>
+                <tr><th>Unit</th><th>Bedrooms</th><th>Est. Sqft</th><th>Projected Sale</th></tr>
+            </thead>
+            <tbody>
+                <?php foreach ($unit_mix as $i => $unit): ?>
+                <tr>
+                    <td><?= $i + 1 ?></td>
+                    <td><?= $unit['bedrooms'] ?>BR</td>
+                    <td><?= number_format($unit['sqft']) ?> sqft</td>
+                    <td>$<?= number_format($unit['sale_price']) ?></td>
+                </tr>
+                <?php endforeach; ?>
+                <tr style="font-weight:bold; background:#f9f6f0;">
+                    <td colspan="3">Total exit value</td>
+                    <td>$<?= number_format($exit_value) ?></td>
+                </tr>
+            </tbody>
+        </table>
+        <div class="text-small text-muted mt-2">
+            Unit sizes estimated based on buildable area and bedroom mix rules.
+            Actual unit mix subject to architect and permit approval.
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <div class="page-footer">
+        <div class="page-footer-left">Wynston Development Intelligence Report &nbsp;·&nbsp; <?= htmlspecialchars($address) ?></div>
+        <div class="page-footer-right">Page 9</div>
+    </div>
+</div>
+
+
+<!-- ============================================================
+     PAGE 10 — BLUEPRINT MATCH
+     ============================================================ -->
+<div class="page interior">
+    <div class="page-header">
+        <div class="page-header-left">
+            <div class="page-section-title">Standardized Design Match</div>
+            <div class="page-section-sub">BC Provincial &amp; CMHC Pre-Approved Plans</div>
+        </div>
+        <div class="page-header-right">WYNSTON W.I.N &nbsp;·&nbsp; Report <?= htmlspecialchars($report_id) ?></div>
+    </div>
+
+    <?php if (!empty($blueprint)): ?>
+    <div class="blueprint-box">
+        <div class="blueprint-img-cell">
+            <?php if (!empty($blueprint['thumbnail_img']) && file_exists(__DIR__ . '/' . $blueprint['thumbnail_img'])): ?>
+                <img class="blueprint-img" src="<?= htmlspecialchars($blueprint['thumbnail_img']) ?>">
+            <?php else: ?>
+                <div class="blueprint-img-placeholder"></div>
+            <?php endif; ?>
+        </div>
+        <div class="blueprint-detail-cell">
+            <div class="blueprint-design-id"><?= htmlspecialchars($blueprint['catalogue']) ?> &nbsp;·&nbsp; <?= htmlspecialchars($blueprint['design_id']) ?></div>
+            <div class="blueprint-design-name"><?= htmlspecialchars($blueprint['design_name']) ?></div>
+
+            <div class="blueprint-saving mt-2">
+                💰 &nbsp;~$35,000 saved vs custom architectural drawings
+            </div>
+            <div class="blueprint-saving">
+                ⏱ &nbsp;Up to 4 months faster permit approval
+            </div>
+
+            <div class="mt-4 text-small">
+                <strong>Why this lot matches:</strong><br>
+                Frontage: <?= number_format($lot_width_ft, 1) ?>ft (<?= number_format($lot_width_m, 2) ?>m) —
+                within design range of <?= number_format($blueprint['min_lot_width'] / 0.3048, 1) ?>–<?= number_format($blueprint['max_lot_width'] / 0.3048, 1) ?>ft<br>
+                Transit: <?= ($blueprint['transit_required'] && $transit_proximate) ? 'Confirmed within 400m FTN' : ($blueprint['transit_required'] ? 'Transit required — verify' : 'Not required for this design') ?>
+            </div>
+
+            <?php if (!empty($blueprint['cost_low_psf']) && !empty($blueprint['cost_high_psf'])): ?>
+            <div class="mt-2 text-small">
+                <strong>Class D cost estimate:</strong>
+                $<?= number_format($blueprint['cost_low_psf']) ?>–$<?= number_format($blueprint['cost_high_psf']) ?>/sqft
+                &nbsp;·&nbsp;
+                Total: $<?= number_format($blueprint['cost_low_psf'] * $buildable_sqft) ?>–$<?= number_format($blueprint['cost_high_psf'] * $buildable_sqft) ?>
+            </div>
+            <?php endif; ?>
+
+            <div class="mt-3 text-small">
+                <strong>Download permit-ready plans:</strong><br>
+                <?= htmlspecialchars($blueprint['external_url']) ?>
+            </div>
+        </div>
+    </div>
+
+    <div class="blueprint-disclaimer">
+        Plans provided by <?= htmlspecialchars($blueprint['catalogue']) ?>.
+        Wynston does not host or modify these documents.
+        Design compatibility based on lot dimensions only.
+        Verify with the City of Vancouver and a licensed professional before proceeding.
+    </div>
+
+    <?php else: ?>
+    <div class="flag-box flag-gray">
+        No standardized design match found for this lot profile.
+        Contact Wynston for custom design referrals.
+    </div>
+    <?php endif; ?>
+
+    <div class="page-footer">
+        <div class="page-footer-left">Wynston Development Intelligence Report &nbsp;·&nbsp; <?= htmlspecialchars($address) ?></div>
+        <div class="page-footer-right">Page 10</div>
+    </div>
+</div>
+
+
+<!-- ============================================================
+     PAGE 11 — WYNSTON OUTLOOK
+     ============================================================ -->
+<div class="page interior">
+    <div class="page-header">
+        <div class="page-header-left">
+            <div class="page-section-title">Wynston Outlook</div>
+            <div class="page-section-sub">12-Month $/sqft Intelligence &nbsp;·&nbsp; <?= htmlspecialchars($neighbourhood_display) ?> &nbsp;·&nbsp; <?= htmlspecialchars($outlook_quarter ?? 'Current Quarter') ?></div>
+        </div>
+        <div class="page-header-right">WYNSTON W.I.N &nbsp;·&nbsp; Report <?= htmlspecialchars($report_id) ?></div>
+    </div>
+
+    <?php if (!empty($outlook_data)): ?>
+
+    <div class="outlook-psf-row">
+        <div class="outlook-psf-cell">
+            <div class="outlook-psf-label">Build Cost</div>
+            <div class="outlook-psf-value">$<?= number_format($build_cost_psf) ?></div>
+            <div class="text-small text-muted">/sqft</div>
+        </div>
+        <div class="outlook-psf-cell">
+            <div class="outlook-psf-label">Current Finished Price</div>
+            <div class="outlook-psf-value">$<?= number_format($current_sold_psf) ?></div>
+            <div class="text-small text-muted">/sqft</div>
+        </div>
+        <div class="outlook-psf-cell highlight">
+            <div class="outlook-psf-label">Wynston Outlook</div>
+            <div class="outlook-psf-value">$<?= number_format($outlook_psf) ?></div>
+            <div class="text-small" style="color:#c9a84c;">/sqft projected</div>
+        </div>
+    </div>
+
+    <div class="outlook-margin-row mt-4">
+        <div class="outlook-margin-label">Current margin</div>
+        <div class="outlook-margin-value">$<?= number_format($current_margin) ?>/sqft</div>
+        <div class="outlook-margin-delta"></div>
+    </div>
+    <div class="outlook-margin-row">
+        <div class="outlook-margin-label">Projected margin (12-month)</div>
+        <div class="outlook-margin-value">$<?= number_format($projected_margin) ?>/sqft</div>
+        <div class="outlook-margin-delta">
+            <?= $projected_margin >= $current_margin ? '▲' : '▼' ?>
+            $<?= number_format(abs($projected_margin - $current_margin)) ?>/sqft
+        </div>
+    </div>
+
+    <!-- Layer breakdown -->
+    <div class="mt-4">
+        <div class="proforma-section-title">Three-Layer Methodology</div>
+        <div class="outlook-layer-table">
+            <div class="outlook-layer-row" style="font-weight:bold; font-size:7.5pt; color:#94a3b8; text-transform:uppercase; padding-bottom:2mm;">
+                <div class="outlook-layer-name">Layer</div>
+                <div class="outlook-layer-signal">Signal</div>
+                <div class="outlook-layer-weight">Weight</div>
+                <div class="outlook-layer-contrib">Contribution</div>
+                <div class="outlook-layer-source">Source</div>
+            </div>
+            <div class="outlook-layer-row">
+                <div class="outlook-layer-name">Macro Signal</div>
+                <div class="outlook-layer-signal"><?= $outlook_data['macro_signal'] >= 0 ? '+' : '' ?><?= number_format($outlook_data['macro_signal'], 1) ?>%</div>
+                <div class="outlook-layer-weight"><?= number_format($outlook_data['macro_weight'] * 100) ?>%</div>
+                <div class="outlook-layer-contrib"><?= number_format($outlook_data['macro_signal'] * $outlook_data['macro_weight'], 2) ?>%</div>
+                <div class="outlook-layer-source">6 institutions</div>
+            </div>
+            <div class="outlook-layer-row">
+                <div class="outlook-layer-name">Local Momentum</div>
+                <div class="outlook-layer-signal"><?= $outlook_data['local_momentum'] >= 0 ? '+' : '' ?><?= number_format($outlook_data['local_momentum'], 1) ?>%</div>
+                <div class="outlook-layer-weight"><?= number_format($outlook_data['local_weight'] * 100) ?>%</div>
+                <div class="outlook-layer-contrib"><?= number_format($outlook_data['local_momentum'] * $outlook_data['local_weight'], 2) ?>%</div>
+                <div class="outlook-layer-source">Neighbourhood HPI</div>
+            </div>
+            <div class="outlook-layer-row">
+                <div class="outlook-layer-name">Pipeline Signal</div>
+                <div class="outlook-layer-signal"><?= $outlook_data['pipeline_signal'] >= 0 ? '+' : '' ?><?= number_format($outlook_data['pipeline_signal'], 1) ?>%</div>
+                <div class="outlook-layer-weight"><?= number_format($outlook_data['pipeline_weight'] * 100) ?>%</div>
+                <div class="outlook-layer-contrib"><?= number_format($outlook_data['pipeline_signal'] * $outlook_data['pipeline_weight'], 2) ?>%</div>
+                <div class="outlook-layer-source">Active permits</div>
+            </div>
+            <div class="outlook-layer-row">
+                <div class="outlook-layer-name">Population Signal</div>
+                <div class="outlook-layer-signal"><?= !empty($outlook_data['population_signal']) ? ($outlook_data['population_signal'] >= 0 ? '+' : '') . number_format($outlook_data['population_signal'], 1) . '%' : '—' ?></div>
+                <div class="outlook-layer-weight"><?= number_format($outlook_data['population_weight'] * 100) ?>%</div>
+                <div class="outlook-layer-contrib"><?= !empty($outlook_data['population_signal']) ? number_format($outlook_data['population_signal'] * $outlook_data['population_weight'], 2) . '%' : '0.00%' ?></div>
+                <div class="outlook-layer-source">Stats Canada</div>
+            </div>
+            <div class="outlook-layer-row" style="font-weight:bold; background:#f9f6f0;">
+                <div class="outlook-layer-name">Combined Outlook</div>
+                <div class="outlook-layer-signal"><?= $outlook_pct >= 0 ? '+' : '' ?><?= number_format($outlook_pct, 1) ?>%</div>
+                <div class="outlook-layer-weight">100%</div>
+                <div class="outlook-layer-contrib" style="color:#002446;"><?= $outlook_pct >= 0 ? '+' : '' ?><?= number_format($outlook_pct, 1) ?>%</div>
+                <div class="outlook-layer-source"></div>
+            </div>
+        </div>
+    </div>
+
+    <?php if (!empty($outlook_data['confidence_band_low']) && !empty($outlook_data['confidence_band_high'])): ?>
+    <div class="text-small text-muted mt-2">
+        Confidence range: <?= $outlook_data['confidence_band_low'] >= 0 ? '+' : '' ?><?= number_format($outlook_data['confidence_band_low'], 1) ?>%
+        to <?= $outlook_data['confidence_band_high'] >= 0 ? '+' : '' ?><?= number_format($outlook_data['confidence_band_high'], 1) ?>%
+    </div>
+    <?php endif; ?>
+
+    <?php if (!empty($outlook_sources)): ?>
+    <div class="text-small text-muted mt-2">
+        Institutional sources: <?= htmlspecialchars(implode(', ', $outlook_sources)) ?>
+    </div>
+    <?php endif; ?>
+
+    <?php else: ?>
+    <div class="flag-box flag-gray">
+        Wynston Outlook data not yet available for this neighbourhood.
+        Enter quarterly bank/broker forecasts via the W.I.N admin panel to activate this section.
+    </div>
+    <?php endif; ?>
+
+    <div class="text-small text-muted mt-4">
+        Wynston Outlook is compiled from publicly available institutional forecasts and proprietary neighbourhood market data.
+        Provided for informational purposes only. Not financial, investment, or real estate advice.
+    </div>
+
+    <div class="page-footer">
+        <div class="page-footer-left">Wynston Development Intelligence Report &nbsp;·&nbsp; <?= htmlspecialchars($address) ?></div>
+        <div class="page-footer-right">Page 11</div>
+    </div>
+</div>
+
+
+<!-- ============================================================
+     PAGE 12 — RISK ANALYSIS
+     ============================================================ -->
+<div class="page interior">
+    <div class="page-header">
+        <div class="page-header-left">
+            <div class="page-section-title">Risk Analysis</div>
+            <div class="page-section-sub">Standard &amp; Conditional Risk Factors</div>
+        </div>
+        <div class="page-header-right">WYNSTON W.I.N &nbsp;·&nbsp; Report <?= htmlspecialchars($report_id) ?></div>
+    </div>
+
+    <!-- Standard risks — always shown -->
+    <div class="risk-item">
+        <div class="risk-title">1. Construction Cost Inflation</div>
+        <div class="risk-body">
+            BC Stats Building Construction Price Index (BCPI) has averaged 3–5% annual increase over the past three years.
+            Pro forma uses current $/sqft actuals from COV permits. If costs rise 10%: estimated profit reduces to
+            $<?= number_format($profit - ($hard_build_cost * 0.10)) ?>.
+            If costs rise 20%: $<?= number_format($profit - ($hard_build_cost * 0.20)) ?>.
+        </div>
+    </div>
+
+    <div class="risk-item">
+        <div class="risk-title">2. Interest Rate Environment</div>
+        <div class="risk-body">
+            Construction mortgage rates currently influence developer carrying costs during the build period (typically 12–18 months).
+            A 1% rate increase on a $<?= number_format($total_project_cost * 0.65) ?> construction facility adds approximately
+            $<?= number_format($total_project_cost * 0.65 * 0.01 * 1.25) ?> in additional financing costs over a 15-month build.
+            Consult your mortgage broker before proceeding.
+        </div>
+    </div>
+
+    <div class="risk-item <?= isset($dom_data['duplex']) && $dom_data['duplex']['diff'] > 5 ? 'risk-active' : '' ?>">
+        <div class="risk-title">3. Market Timing</div>
+        <div class="risk-body">
+            <?php if (isset($dom_data['duplex']) && $dom_data['duplex']['current'] !== null): ?>
+                Current duplex DOM in <?= htmlspecialchars($neighbourhood_display) ?>: <?= $dom_data['duplex']['current'] ?> days.
+                <?= $dom_data['duplex']['diff'] < -1
+                    ? 'Market is accelerating — conditions favour proceeding now.'
+                    : ($dom_data['duplex']['diff'] > 5
+                        ? 'DOM is rising — monitor market closely before committing.'
+                        : 'Market conditions are stable.') ?>
+            <?php else: ?>
+                DOM data not available for this neighbourhood. Monitor market conditions closely before committing.
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <div class="risk-item">
+        <div class="risk-title">4. Permit Timeline</div>
+        <div class="risk-body">
+            Vancouver multiplex permits currently average 6–14 months processing time depending on complexity.
+            <?php if (!empty($blueprint)): ?>
+                Using the matched standardized design (<?= htmlspecialchars($blueprint['design_id']) ?>) may reduce this to approximately 4 months.
+            <?php else: ?>
+                Using a BC Provincial or CMHC pre-approved standardized design can reduce permit timelines to approximately 4 months.
+            <?php endif; ?>
+            Budget for carrying costs during the full permit period.
+        </div>
+    </div>
+
+    <div class="risk-item">
+        <div class="risk-title">5. Resale Absorption</div>
+        <div class="risk-body">
+            <?php if ($comp_count >= 5): ?>
+                Strong comparable sales activity (<?= $comp_count ?> comps) in this neighbourhood indicates healthy buyer absorption.
+            <?php elseif ($comp_count >= 2): ?>
+                Moderate comparable sales activity (<?= $comp_count ?> comps). Monitor pre-sale activity in adjacent neighbourhoods before committing to strata path.
+            <?php else: ?>
+                Limited comparable sales data for this neighbourhood. Consider rental path as an alternative exit strategy if strata pre-sales are slow to materialize.
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <!-- Conditional risks -->
+    <?php if ($heritage_category === 'A' || $heritage_category === 'B'): ?>
+    <div class="risk-item risk-critical">
+        <div class="risk-title">⛔ Heritage Category <?= $heritage_category ?> — Permit Risk</div>
+        <div class="risk-body">
+            This property carries a Category <?= $heritage_category ?> heritage designation.
+            A Heritage Revitalization Agreement (HRA) may be required before development can proceed.
+            Expect significant permit delays (12–24+ months) and potential cost to retain a heritage consultant ($15,000–$40,000).
+            Engage a heritage professional immediately.
+        </div>
+    </div>
+    <?php elseif ($heritage_category === 'C'): ?>
+    <div class="risk-item risk-active">
+        <div class="risk-title">⚠ Heritage Category C — Inspection Required</div>
+        <div class="risk-body">
+            This property is flagged as Category C heritage. A heritage inspection is required prior to permit application.
+            Budget additional time (4–8 weeks) and professional fees for the inspection process.
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <?php if ($peat_zone): ?>
+    <div class="risk-item risk-active">
+        <div class="risk-title">⚠ Peat Zone — Foundation Cost Uncertainty</div>
+        <div class="risk-body">
+            This lot is within a known Vancouver peat zone. Helical pile foundations are likely required.
+            The $150,000 contingency included in the pro forma is an estimate only — commission a geotechnical report
+            before purchase to determine actual foundation requirements and costs.
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <?php if (!empty($covenant_present) && $covenant_present): ?>
+    <div class="risk-item risk-active">
+        <div class="risk-title">⚠ Covenant / Easement — Title Review Required</div>
+        <div class="risk-body">
+            A covenant or easement is registered on this title.
+            Type: <?= htmlspecialchars($covenant_types ?? 'Unknown') ?>.
+            Title encumbrances can restrict development potential or impose ongoing obligations.
+            Obtain a full LTSA title search and legal review before proceeding.
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <div class="page-footer">
+        <div class="page-footer-left">Wynston Development Intelligence Report &nbsp;·&nbsp; <?= htmlspecialchars($address) ?></div>
+        <div class="page-footer-right">Page 12</div>
+    </div>
+</div>
+
+
+<!-- ============================================================
+     BACK COVER
+     ============================================================ -->
+<div class="page back-cover">
+
+    <?php if (!empty($report_logo_path) && $subscription_tier === 'white_label'): ?>
+        <img src="<?= htmlspecialchars($report_logo_path) ?>" style="height:14mm; margin-bottom:6mm; display:block;">
+    <?php else: ?>
+        <div class="cover-logo" style="font-size:20pt; margin-bottom:1mm;">WYNSTON</div>
+        <div class="cover-logo-sub" style="margin-bottom:6mm;">Intelligent Navigator &nbsp;·&nbsp; W.I.N</div>
+    <?php endif; ?>
+
+    <div class="back-cover-divider"></div>
+
+    <div class="back-cover-agent-row" style="margin-top:6mm;">
+        <div class="back-cover-agent-img-cell">
+            <?php if (!empty($agent_photo_path) && file_exists(__DIR__ . '/' . $agent_photo_path)): ?>
+                <img class="back-cover-agent-img" src="<?= htmlspecialchars($agent_photo_path) ?>">
+            <?php else: ?>
+                <div class="back-cover-agent-img-placeholder"></div>
+            <?php endif; ?>
+        </div>
+        <div class="back-cover-agent-detail">
+            <div class="back-cover-agent-name"><?= htmlspecialchars($agent_name ?? 'Tam Nguyen') ?></div>
+            <div class="back-cover-agent-title"><?= htmlspecialchars($agent_title ?? 'Realtor® · Wynston Concierge Real Estate') ?></div>
+            <div class="back-cover-agent-bio"><?= htmlspecialchars($agent_bio ?? 'Wynston specializes in missing middle multiplex development intelligence for Metro Vancouver. Helping builders identify, analyze, and acquire R1-1 zoned properties across the city.') ?></div>
+        </div>
+    </div>
+
+    <div class="back-cover-divider"></div>
+
+    <div class="back-cover-contact">
+        <span class="back-cover-contact-label">Phone: </span>wynston.ca &nbsp;·&nbsp; Vancouver, BC
+    </div>
+    <div class="back-cover-contact">
+        <span class="back-cover-contact-label">Report generated by: </span>W.I.N — Wynston Intelligent Navigator &nbsp;·&nbsp; Report ID: <?= htmlspecialchars($report_id) ?>
+    </div>
+    <div class="back-cover-contact" style="margin-top:3mm; font-size:8pt;">
+        Construction mortgage professionals: contact Wynston for project-specific data packages.
+    </div>
+
+    <div class="back-cover-divider"></div>
+
+    <div class="back-cover-sources">
+        <strong style="color:#c9a84c;">Data Sources:</strong>
+        REBGV MLS (new builds 2024+) &nbsp;·&nbsp; City of Vancouver Open Data &nbsp;·&nbsp;
+        BC Assessment &nbsp;·&nbsp; TransLink GTFS &nbsp;·&nbsp; CMHC &nbsp;·&nbsp;
+        BC Stats BCPI &nbsp;·&nbsp; Stats Canada Census &nbsp;·&nbsp;
+        RBC / TD / BMO / BCREA / RE/MAX / Royal LePage institutional forecasts
+    </div>
+
+    <div class="back-cover-disclaimer">
+        This report is prepared by Wynston Concierge Real Estate for informational purposes only. It does not constitute financial,
+        investment, legal, or real estate advice. All data sourced from publicly available datasets and proprietary market intelligence.
+        Pro forma figures are estimates only and subject to change. Past performance does not guarantee future results.
+        Always consult a licensed professional before making investment decisions.
+        © Wynston Concierge Real Estate <?= date('Y') ?>. Report ID: <?= htmlspecialchars($report_id) ?>.
+    </div>
+
+    <div class="back-cover-gold-bar"></div>
+</div>
+
+</body>
+</html>

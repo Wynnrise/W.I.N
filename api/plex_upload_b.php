@@ -1,106 +1,86 @@
 <?php
-// ============================================================
-// api/plex_upload_b.php  —  Channel B: liv.rent Rental Entry
-// Session 03 — Admin Upload Channels
-//
-// Accepts: POST JSON or form fields:
-//   neighbourhood_slug, data_month (YYYY-MM),
-//   rent_1br, rent_2br, rent_3br,
-//   furnished_premium_pct (optional, default 20),
-//   source_note (optional)
-//
-// Returns: JSON {success, id, message}
-// ============================================================
+// api/plex_upload_b.php
+// POST: save rental data from one source (livrent or rebgv)
+// Body: { neighbourhood_slug, data_month, source, rent_1br, rent_2br,
+//         rent_3br, furnished_premium_pct }
 
-session_start();
+session_start([
+    'cookie_lifetime' => 86400,
+    'cookie_secure'   => true,
+    'cookie_httponly' => true,
+    'cookie_domain'   => 'wynston.ca',
+    'cookie_samesite' => 'Lax',
+]);
+
+header('Content-Type: application/json');
+header('Cache-Control: no-store');
+
 if (empty($_SESSION['admin_logged_in'])) {
     http_response_code(401);
-    echo json_encode(['success'=>false,'error'=>'Unauthorized']);
+    echo json_encode(['success' => false, 'error' => 'Not authenticated']);
     exit;
 }
 
-header('Content-Type: application/json');
-
-$host = 'localhost';
-$db   = 'u990588858_Property';
-$user = 'u990588858_Multiplex';
-$pass = 'Concac1979$';
+$host = 'localhost'; $db = 'u990588858_Property';
+$user = 'u990588858_Multiplex'; $pass = 'Concac1979$';
 try {
     $pdo = new PDO("mysql:host=$host;dbname=$db;charset=utf8mb4", $user, $pass);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 } catch (PDOException $e) {
-    echo json_encode(['success'=>false,'error'=>'DB: '.$e->getMessage()]); exit;
+    http_response_code(500);
+    echo json_encode(['success' => false, 'error' => 'DB connection failed']);
+    exit;
 }
 
-// Accept either JSON body or form POST
-$input = json_decode(file_get_contents('php://input'), true);
-if (!$input) $input = $_POST;
+$input  = json_decode(file_get_contents('php://input'), true);
+$slug   = trim($input['neighbourhood_slug'] ?? '');
+$month  = trim($input['data_month']         ?? '');
+$source = trim($input['source']             ?? 'livrent'); // 'livrent' or 'rebgv'
 
-$nb_slug     = trim($input['neighbourhood_slug'] ?? '');
-$data_month  = trim($input['data_month'] ?? '');
-$rent_1br    = isset($input['rent_1br'])    && $input['rent_1br']    !== '' ? (int)$input['rent_1br']    : null;
-$rent_2br    = isset($input['rent_2br'])    && $input['rent_2br']    !== '' ? (int)$input['rent_2br']    : null;
-$rent_3br    = isset($input['rent_3br'])    && $input['rent_3br']    !== '' ? (int)$input['rent_3br']    : null;
-$furnished   = isset($input['furnished_premium_pct']) && $input['furnished_premium_pct'] !== ''
-               ? (float)$input['furnished_premium_pct'] : 20.0;
-$source_note = trim($input['source_note'] ?? 'liv.rent');
+$rent_1br  = $input['rent_1br']              !== '' ? (int)$input['rent_1br']              : null;
+$rent_2br  = $input['rent_2br']              !== '' ? (int)$input['rent_2br']              : null;
+$rent_3br  = $input['rent_3br']              !== '' ? (int)$input['rent_3br']              : null;
+$furn_pct  = $input['furnished_premium_pct'] !== '' ? (float)$input['furnished_premium_pct'] : 20.00;
 
-// ── Validate ──────────────────────────────────────────────────────────────────
-if (!$nb_slug) {
-    echo json_encode(['success'=>false,'error'=>'neighbourhood_slug is required.']); exit;
-}
-if (!preg_match('/^\d{4}-\d{2}$/', $data_month)) {
-    echo json_encode(['success'=>false,'error'=>'data_month must be YYYY-MM.']); exit;
-}
+if (!$slug)  { echo json_encode(['success' => false, 'error' => 'Neighbourhood required']); exit; }
+if (!$month) { echo json_encode(['success' => false, 'error' => 'Month required']); exit; }
 if (!$rent_1br && !$rent_2br && !$rent_3br) {
-    echo json_encode(['success'=>false,'error'=>'At least one rent value required.']); exit;
+    echo json_encode(['success' => false, 'error' => 'Enter at least one rent value']); exit;
 }
 
-$data_month_dt = $data_month . '-01';
+// Map source to csv_type
+$csv_type = ($source === 'rebgv') ? 'rental_rebgv' : 'rental_livrent';
 
-// ── Versioning: deactivate previous rental rows for this nb + month ───────────
+$month_dt = strlen($month) === 7 ? $month . '-01' : $month;
+$label    = date('F Y', strtotime($month_dt));
+
+// Versioning: deactivate previous rows for same neighbourhood + month + source
 $pdo->prepare("
     UPDATE monthly_market_stats
     SET is_active = 0
-    WHERE neighbourhood_slug = :slug
-      AND data_month         = :month
-      AND csv_type           = 'rental'
-")->execute([':slug'=>$nb_slug, ':month'=>$data_month_dt]);
+    WHERE neighbourhood_slug = ? AND data_month = ? AND csv_type = ?
+")->execute([$slug, $month_dt, $csv_type]);
 
-// ── Insert new rental row ──────────────────────────────────────────────────────
-$stmt = $pdo->prepare("
+// Insert new row
+$pdo->prepare("
     INSERT INTO monthly_market_stats
         (neighbourhood_slug, data_month, csv_type,
          avg_rent_1br, avg_rent_2br, avg_rent_3br,
-         furnished_premium_pct, is_active, source, created_at)
-    VALUES
-        (:slug, :month, 'rental',
-         :r1, :r2, :r3,
-         :furn, 1, :src, NOW())
-");
-$stmt->execute([
-    ':slug'  => $nb_slug,
-    ':month' => $data_month_dt,
-    ':r1'    => $rent_1br,
-    ':r2'    => $rent_2br,
-    ':r3'    => $rent_3br,
-    ':furn'  => $furnished,
-    ':src'   => $source_note,
+         furnished_premium_pct, source, is_active, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NOW())
+")->execute([
+    $slug, $month_dt, $csv_type,
+    $rent_1br, $rent_2br, $rent_3br,
+    $furn_pct,
+    $source === 'rebgv' ? 'REBGV Rental' : 'liv.rent',
 ]);
 
-$new_id = $pdo->lastInsertId();
+$source_label = $source === 'rebgv' ? 'REBGV rental' : 'liv.rent';
 
 echo json_encode([
-    'success'  => true,
-    'id'       => (int)$new_id,
-    'message'  => "Rental data saved for {$nb_slug} — {$data_month}. Previous rows deactivated.",
-    'data'     => [
-        'neighbourhood_slug'   => $nb_slug,
-        'data_month'           => $data_month,
-        'avg_rent_1br'         => $rent_1br,
-        'avg_rent_2br'         => $rent_2br,
-        'avg_rent_3br'         => $rent_3br,
-        'furnished_premium_pct'=> $furnished,
-        'source'               => $source_note,
-    ],
+    'success'   => true,
+    'message'   => ucfirst($source_label) . " data saved for {$slug} — {$label}",
+    'slug'      => $slug,
+    'month'     => $label,
+    'csv_type'  => $csv_type,
 ]);

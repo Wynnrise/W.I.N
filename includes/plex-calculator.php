@@ -24,6 +24,15 @@
  *            (FLAG 6: tier is competitive differentiator — must be visible in panel and PDF)
  *   Fix 9 — Outlook weights now shift dynamically per confidence tier (Tier 1/2/3)
  *            instead of being hardcoded at 40/40/20
+ *
+ * Session 09 fixes:
+ *   Fix 10 — TIER_WEIGHTS updated to 5-layer formula: 30/35/10/10/15
+ *             Macro 30%, Local HPI 35%, Pipeline 10%, Population 10%, Supply signal 15%
+ *             (Supply signal = placeholder for CMHC housing starts — activates post-launch)
+ *   Fix 11 — Bank forecast outlier removal changed from simple min/max strip to IQR method
+ *             Simple strip with only 4 forecasts left 2 values — too thin for averaging
+ *   Fix 12 — 3-comparable rental mid-point: weighted average of liv.rent + REBGV + CMHC
+ *             (weights: 0.45 liv.rent + 0.35 REBGV + 0.20 CMHC — recency and volume bias)
  */
 class WynstonCalculator {
 
@@ -50,14 +59,26 @@ class WynstonCalculator {
     private const FSR_RENTAL = 1.00;
 
     /**
-     * Confidence tier weights — 4 layers.
-     * Weights adjusted from 40/40/20 to 38/38/12/12.
-     * If no population data, Layer 4 = 0 and weights compensate automatically.
+     * Confidence tier weights — 5 layers.
+     *
+     * Layer 1 — Macro (bank/broker forecasts):    30%
+     * Layer 2 — Local HPI momentum + DOM:         35%
+     * Layer 3 — Pipeline signal (multi_2025):     10%
+     * Layer 4 — Population supply-demand gap:     10%
+     * Layer 5 — Supply signal (CMHC starts):      15% ← placeholder, activates post-launch
+     *
+     * When no population data exists, Layer 4 contribution = 0.
+     * When no CMHC supply data exists, Layer 5 contribution = 0.
+     * Remaining layers compensate automatically — total never exceeds 100%.
+     *
+     * Tier 1 (5+ comps): full local weight — data is strong enough to trust.
+     * Tier 2 (2–4 comps): shift weight toward macro — local data thinner.
+     * Tier 3 (0–1 comps): lean heavily on macro — barely any local data.
      */
     private const TIER_WEIGHTS = [
-        1 => ['macro' => 0.38, 'local' => 0.38, 'pipeline' => 0.12, 'population' => 0.12],
-        2 => ['macro' => 0.53, 'local' => 0.23, 'pipeline' => 0.12, 'population' => 0.12],
-        3 => ['macro' => 0.68, 'local' => 0.08, 'pipeline' => 0.12, 'population' => 0.12],
+        1 => ['macro' => 0.30, 'local' => 0.35, 'pipeline' => 0.10, 'population' => 0.10, 'supply' => 0.15],
+        2 => ['macro' => 0.45, 'local' => 0.25, 'pipeline' => 0.10, 'population' => 0.10, 'supply' => 0.10],
+        3 => ['macro' => 0.60, 'local' => 0.15, 'pipeline' => 0.10, 'population' => 0.10, 'supply' => 0.05],
     ];
 
     /**
@@ -107,6 +128,95 @@ class WynstonCalculator {
                 'colour'      => 'gray',
             ];
         }
+    }
+
+
+    // =========================================================
+    // 3-COMPARABLE RENTAL MID-POINT
+    // Weighted average of liv.rent + REBGV + CMHC
+    // =========================================================
+
+    /**
+     * Calculate the Wynston rental mid-point from 3 data sources.
+     *
+     * Sources and weights (Fix 12):
+     *   liv.rent  — 45%  (most current asking rent, updated monthly)
+     *   REBGV     — 35%  (actual leased prices from board data, updated monthly)
+     *   CMHC      — 20%  (annual benchmark — used as floor/sanity check)
+     *
+     * If a source is missing (0 or null), its weight is redistributed
+     * proportionally to the remaining sources so total always = 100%.
+     *
+     * @param array $livrent   ['1br' => float, '2br' => float, '3br' => float]
+     * @param array $rebgv     ['1br' => float, '2br' => float, '3br' => float]
+     * @param array $cmhc      ['1br' => float, '2br' => float, '3br' => float]
+     *
+     * @return array ['1br' => float, '2br' => float, '3br' => float,
+     *               'sources_used' => array, 'detail' => array]
+     */
+    public function calculateRentalMidPoint(
+        array $livrent,
+        array $rebgv,
+        array $cmhc
+    ): array {
+        $base_weights = [
+            'livrent' => 0.45,
+            'rebgv'   => 0.35,
+            'cmhc'    => 0.20,
+        ];
+
+        $result = ['sources_used' => [], 'detail' => []];
+
+        foreach (['1br', '2br', '3br'] as $type) {
+            $sources = [
+                'livrent' => (float)($livrent[$type] ?? 0),
+                'rebgv'   => (float)($rebgv[$type]   ?? 0),
+                'cmhc'    => (float)($cmhc[$type]    ?? 0),
+            ];
+
+            // Filter out missing sources (0 = not entered)
+            $active = array_filter($sources, fn($v) => $v > 0);
+
+            if (empty($active)) {
+                $result[$type] = 0;
+                $result['detail'][$type] = ['mid_point' => 0, 'sources' => []];
+                continue;
+            }
+
+            // Redistribute weights proportionally among active sources
+            $active_weight_sum = array_sum(
+                array_intersect_key($base_weights, $active)
+            );
+            $adjusted_weights = [];
+            foreach ($active as $src => $val) {
+                $adjusted_weights[$src] = $base_weights[$src] / $active_weight_sum;
+            }
+
+            // Weighted average
+            $mid_point = 0;
+            foreach ($active as $src => $val) {
+                $mid_point += $val * $adjusted_weights[$src];
+            }
+
+            $result[$type] = round($mid_point, 0);
+            $result['detail'][$type] = [
+                'mid_point'   => round($mid_point, 0),
+                'livrent'     => $sources['livrent'],
+                'rebgv'       => $sources['rebgv'],
+                'cmhc'        => $sources['cmhc'],
+                'weights_used'=> $adjusted_weights,
+                'sources'     => array_keys($active),
+            ];
+
+            // Track which sources contributed at least once
+            foreach (array_keys($active) as $src) {
+                if (!in_array($src, $result['sources_used'])) {
+                    $result['sources_used'][] = $src;
+                }
+            }
+        }
+
+        return $result;
     }
 
 
@@ -361,7 +471,9 @@ class WynstonCalculator {
         int   $neighbourhood_avg_pipeline,
         int   $sales_count = 0,
         float $household_growth_pct = 0.0,  // Layer 4: % change in households (2021→2026)
-        float $unit_growth_pct      = 0.0   // Layer 4: % change in housing units (2021→2026)
+        float $unit_growth_pct      = 0.0,  // Layer 4: % change in housing units (2021→2026)
+        float $cmhc_starts_yoy      = 0.0   // Layer 5: % change in CMHC housing starts YoY
+                                             //          0.0 = not yet wired (post-launch)
     ): array {
 
         // Fix 1 — Minimum data guard
@@ -380,10 +492,24 @@ class WynstonCalculator {
         $weights    = self::TIER_WEIGHTS[$tier];
 
         // ── LAYER 1: Macro Signal ────────────────────────────────────────
-        // Average the bank/broker forecasts after removing highest and lowest outlier
+        // Fix 11 — IQR outlier removal instead of simple min/max strip.
+        // Simple strip with 4 forecasts leaves only 2 values — too thin.
+        // IQR method: remove values outside Q1 - 1.5×IQR to Q3 + 1.5×IQR.
+        // If all values are within IQR range (tight consensus), none removed.
         sort($bank_forecasts);
-        array_shift($bank_forecasts); // remove lowest
-        array_pop($bank_forecasts);   // remove highest
+        $n = count($bank_forecasts);
+
+        if ($n >= 4) {
+            $q1 = $bank_forecasts[(int)floor(($n - 1) * 0.25)];
+            $q3 = $bank_forecasts[(int)floor(($n - 1) * 0.75)];
+            $iqr = $q3 - $q1;
+            $filtered = array_values(array_filter(
+                $bank_forecasts,
+                fn($x) => $x >= ($q1 - 1.5 * $iqr) && $x <= ($q3 + 1.5 * $iqr)
+            ));
+            // Fall back to full set if IQR filter removes too many
+            $bank_forecasts = count($filtered) >= 3 ? $filtered : $bank_forecasts;
+        }
 
         $macro_avg    = array_sum($bank_forecasts) / count($bank_forecasts);
 
@@ -436,9 +562,23 @@ class WynstonCalculator {
             $population_weighted   = $population_signal_pct * $weights['population'];
         }
 
+        // ── LAYER 5: Supply Signal (CMHC Housing Starts) ─────────────────
+        // Negative starts YoY = fewer units coming = tighter supply = bullish
+        // Positive starts YoY = more units coming = more supply = bearish
+        // $cmhc_starts_yoy = 0.0 when not yet wired (post-launch via CMHC HMIP API)
+        // Capped at ±3% to prevent a single strong starts month distorting the outlook
+        $supply_weighted = 0.0;
+        $supply_signal_pct = 0.0;
+        if ($cmhc_starts_yoy !== 0.0) {
+            // Invert: more starts = negative signal for price appreciation
+            $supply_signal_pct = max(-3.0, min(3.0, $cmhc_starts_yoy * -0.25));
+            $supply_weighted   = $supply_signal_pct * $weights['supply'];
+        }
+
         // ── COMBINED OUTLOOK ─────────────────────────────────────────────
         $outlook_pct = $macro_weighted + $local_weighted
-                     + $pipeline_weighted + $population_weighted;
+                     + $pipeline_weighted + $population_weighted
+                     + $supply_weighted;
 
         // Projected $/sqft
         $outlook_psf         = $current_finished_psf * (1 + ($outlook_pct / 100));
@@ -457,8 +597,10 @@ class WynstonCalculator {
             'local_momentum_pct'     => round($local_momentum_pct, 2),
             'pipeline_signal_pct'    => round($pipeline_signal_pct, 2),
             'population_signal_pct'  => round($population_signal_pct, 2),
+            'supply_signal_pct'      => round($supply_signal_pct, 2),
             'household_growth_pct'   => round($household_growth_pct, 2),
             'unit_growth_pct'        => round($unit_growth_pct, 2),
+            'cmhc_starts_yoy'        => round($cmhc_starts_yoy, 2),
             'weights_used'           => $weights,
 
             // Combined result

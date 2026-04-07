@@ -53,6 +53,7 @@ if (empty($_SESSION['admin_logged_in'])) {
                 <button type="submit" name="admin_login" class="btn-admin">Login</button>
             </form>
         </div>
+
     </body>
     </html>
     <?php
@@ -310,6 +311,542 @@ if (isset($_GET['dev_delete'])) {
     $pdo->prepare("DELETE FROM developers WHERE id=?")->execute([$did]);
     header("Location: admin.php?tab=developers&msg=" . urlencode("🗑️ Developer deleted."));
     exit;
+}
+if (isset($_POST['dev_set_type'])) {
+    $did  = (int)$_POST['dev_id'];
+    $type = $_POST['user_type'] ?? 'builder';
+    $allowed = ['builder','investor','realtor','broker'];
+    if (!in_array($type, $allowed)) $type = 'builder';
+    $pdo->prepare("UPDATE developers SET user_type = ? WHERE id = ?")->execute([$type, $did]);
+    header("Location: admin.php?tab=developers&msg=" . urlencode("✅ User type updated to '{$type}'."));
+    exit;
+}
+
+// ── Data Import POST handlers ─────────────────────────────────────────────────
+
+// Heritage import — COV heritage-sites.csv
+// Fast: loads all plex lots into PHP memory, matches in PHP, single batch UPDATE
+if (isset($_POST['import_heritage']) && isset($_FILES['heritage_csv'])) {
+    header('Content-Type: application/json');
+    ini_set('max_execution_time', 120);
+    ini_set('memory_limit', '256M');
+
+    $file = $_FILES['heritage_csv'];
+    if ($file['error'] !== UPLOAD_ERR_OK) {
+        echo json_encode(['success'=>false,'error'=>'Upload error: '.$file['error']]); exit;
+    }
+
+    // Strip UTF-8 BOM, detect delimiter
+    $raw = file_get_contents($file['tmp_name']);
+    $raw = preg_replace('/^\xEF\xBB\xBF/', '', $raw);
+    $first_line = strtok($raw, "\n");
+    $delim = (substr_count($first_line, ';') > substr_count($first_line, ',')) ? ';' : ',';
+    file_put_contents($file['tmp_name'], $raw);
+
+    // Parse headers
+    $handle = fopen($file['tmp_name'], 'r');
+    $raw_headers = fgetcsv($handle, 0, $delim);
+    $headers = array_map(fn($h) => strtolower(trim($h)), $raw_headers);
+    $cols = array_flip($headers);
+
+    // Load ALL plex lots with coordinates into memory (pid, lat, lng)
+    $lots = $pdo->query("SELECT pid, lat, lng FROM plex_properties WHERE lat IS NOT NULL AND lng IS NOT NULL")
+                ->fetchAll(PDO::FETCH_ASSOC);
+
+    // Build spatial grid: bucket lots by rounded lat/lng (0.01 degree cells ~1km)
+    // So each heritage point only checks lots in its cell and adjacent cells
+    $grid = [];
+    foreach ($lots as $lot) {
+        $gk = round((float)$lot['lat'], 2) . ',' . round((float)$lot['lng'], 2);
+        $grid[$gk][] = $lot;
+    }
+
+    // Parse heritage CSV, find nearest lot for each point
+    $heritage = []; // pid => category
+    $allowed = ['A','B','C'];
+    $total = 0; $skipped = 0;
+
+    while (($row = fgetcsv($handle, 0, $delim)) !== false) {
+        if (count($row) < 3) continue;
+        $total++;
+
+        $cat_raw = strtoupper(trim($row[$cols['evaluationgroup'] ?? $cols['category'] ?? 0] ?? ''));
+        if (!in_array($cat_raw, $allowed)) { $skipped++; continue; }
+
+        $geo_str = trim($row[$cols['geo_point_2d'] ?? 0] ?? '');
+        if (!$geo_str) { $skipped++; continue; }
+        $parts = array_map('trim', explode(',', $geo_str));
+        if (count($parts) < 2) { $skipped++; continue; }
+        $hlat = (float)$parts[0];
+        $hlng = (float)$parts[1];
+        if (!$hlat || !$hlng) { $skipped++; continue; }
+
+        // Check grid cell + 8 neighbours
+        $best_pid  = null;
+        $best_dist = PHP_FLOAT_MAX;
+        $base_lat  = round($hlat, 2);
+        $base_lng  = round($hlng, 2);
+        $offsets   = [-0.01, 0, 0.01];
+
+        foreach ($offsets as $dlat) {
+            foreach ($offsets as $dlng) {
+                $gk = round($base_lat + $dlat, 2) . ',' . round($base_lng + $dlng, 2);
+                if (!isset($grid[$gk])) continue;
+                foreach ($grid[$gk] as $lot) {
+                    $dist = abs((float)$lot['lat'] - $hlat) + abs((float)$lot['lng'] - $hlng);
+                    if ($dist < $best_dist && $dist < 0.0004) { // ~40m threshold
+                        $best_dist = $dist;
+                        $best_pid  = $lot['pid'];
+                    }
+                }
+            }
+        }
+
+        if ($best_pid) {
+            // If same lot already tagged, keep highest category (A > B > C)
+            if (!isset($heritage[$best_pid]) || strcmp($cat_raw, $heritage[$best_pid]) < 0) {
+                $heritage[$best_pid] = $cat_raw;
+            }
+        } else {
+            $skipped++;
+        }
+    }
+    fclose($handle);
+
+    // Batch update: reset all, then set matched lots
+    $pdo->exec("UPDATE plex_properties SET heritage_category = 'none'");
+    $stmt = $pdo->prepare("UPDATE plex_properties SET heritage_category = ? WHERE pid = ?");
+    foreach ($heritage as $pid => $cat) {
+        $stmt->execute([$cat, $pid]);
+    }
+
+    $matched = count($heritage);
+    echo json_encode([
+        'success' => true,
+        'total'   => $total,
+        'matched' => $matched,
+        'skipped' => $skipped,
+        'note'    => "Matched $matched heritage lots by GPS coordinates",
+    ]); exit;
+}
+
+// Peat import — SQL bbox pre-filter + PHP pip only on candidates
+if (isset($_POST['import_peat'])) {
+    header('Content-Type: application/json');
+    ini_set('memory_limit','256M'); ini_set('max_execution_time',120);
+
+    $builtin = [
+        [[-123.132,49.218],[-123.118,49.218],[-123.118,49.228],[-123.132,49.228],[-123.132,49.218]],
+        [[-123.095,49.238],[-123.075,49.238],[-123.075,49.248],[-123.095,49.248],[-123.095,49.238]],
+        [[-123.105,49.205],[-123.080,49.205],[-123.080,49.218],[-123.105,49.218],[-123.105,49.205]],
+    ];
+
+    $raw_polys = [];
+    $use_builtin = isset($_POST['peat_builtin']) || !isset($_FILES['peat_geojson']) || $_FILES['peat_geojson']['error']!==UPLOAD_ERR_OK;
+
+    if (!$use_builtin) {
+        $gj = json_decode(file_get_contents($_FILES['peat_geojson']['tmp_name']), true);
+        if (!$gj||!isset($gj['features'])){echo json_encode(['success'=>false,'error'=>'Invalid GeoJSON']);exit;}
+        foreach ($gj['features'] as $feat) {
+            $geom=$feat['geometry'];
+            if ($geom['type']==='Polygon')      $raw_polys[]=array_map(fn($c)=>[$c[0],$c[1]],$geom['coordinates'][0]);
+            elseif($geom['type']==='MultiPolygon') foreach($geom['coordinates'] as $p) $raw_polys[]=array_map(fn($c)=>[$c[0],$c[1]],$p[0]);
+        }
+    } else {
+        $raw_polys = $builtin;
+    }
+
+    // Build bbox per polygon
+    $poly_boxes = [];
+    foreach ($raw_polys as $poly) {
+        $lngs=array_column($poly,0); $lats=array_column($poly,1);
+        $poly_boxes[]=['coords'=>$poly,'minlat'=>min($lats)-0.0001,'maxlat'=>max($lats)+0.0001,'minlng'=>min($lngs)-0.0001,'maxlng'=>max($lngs)+0.0001];
+    }
+
+    function pip_pt(float $lat,float $lng,array $poly):bool {
+        $n=count($poly);$inside=false;$j=$n-1;
+        for($i=0;$i<$n;$i++){
+            $xi=$poly[$i][0];$yi=$poly[$i][1];$xj=$poly[$j][0];$yj=$poly[$j][1];
+            if((($yi>$lat)!==($yj>$lat))&&($lng<($xj-$xi)*($lat-$yi)/($yj-$yi)+$xi))$inside=!$inside;
+            $j=$i;
+        }
+        return $inside;
+    }
+
+    $pdo->exec("UPDATE plex_properties SET peat_zone=0");
+    $stmt_upd = $pdo->prepare("UPDATE plex_properties SET peat_zone=1 WHERE pid=?");
+    $flagged=0; $total_checked=0; $already=[];
+
+    foreach ($poly_boxes as $pb) {
+        $stmt = $pdo->prepare("SELECT pid,lat,lng FROM plex_properties WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ? AND lat IS NOT NULL");
+        $stmt->execute([$pb['minlat'],$pb['maxlat'],$pb['minlng'],$pb['maxlng']]);
+        $candidates = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $total_checked += count($candidates);
+        foreach ($candidates as $lot) {
+            if (isset($already[$lot['pid']])) continue;
+            if (pip_pt((float)$lot['lat'],(float)$lot['lng'],$pb['coords'])) {
+                $stmt_upd->execute([$lot['pid']]);
+                $already[$lot['pid']]=1;
+                $flagged++;
+            }
+        }
+    }
+
+    echo json_encode(['success'=>true,'lots_checked'=>$total_checked,'flagged'=>$flagged,'polygons'=>count($poly_boxes),'method'=>$use_builtin?'builtin':'geojson']); exit;
+}
+
+// Floodplain import — SQL bbox pre-filter + PHP pip only on candidates
+if (isset($_POST['import_floodplain']) && isset($_FILES['flood_geojson']) && $_FILES['flood_geojson']['error']===UPLOAD_ERR_OK) {
+    header('Content-Type: application/json');
+    ini_set('memory_limit','256M'); ini_set('max_execution_time',120);
+
+    $gj = json_decode(file_get_contents($_FILES['flood_geojson']['tmp_name']), true);
+    if (!$gj || !isset($gj['features'])) {
+        echo json_encode(['success'=>false,'error'=>'Invalid GeoJSON']); exit;
+    }
+
+    // Parse polygons + compute tight bounding boxes
+    $poly_boxes = [];
+    foreach ($gj['features'] as $feat) {
+        $props = $feat['properties'] ?? [];
+        $risk  = $props['flood_risk'] ?? 'high';
+        $geom  = $feat['geometry'];
+        $rings = [];
+        if ($geom['type']==='Polygon')      $rings[] = $geom['coordinates'][0];
+        elseif ($geom['type']==='MultiPolygon') foreach($geom['coordinates'] as $p) $rings[] = $p[0];
+        foreach ($rings as $ring) {
+            $coords = array_map(fn($c)=>[$c[0],$c[1]], $ring);
+            $lngs   = array_column($coords,0); $lats = array_column($coords,1);
+            $poly_boxes[] = ['risk'=>$risk,'coords'=>$coords,
+                'minlat'=>min($lats)-0.0001,'maxlat'=>max($lats)+0.0001,
+                'minlng'=>min($lngs)-0.0001,'maxlng'=>max($lngs)+0.0001];
+        }
+    }
+
+    // Point-in-polygon
+    function pip_fl(float $lat,float $lng,array $poly):bool {
+        $n=count($poly);$inside=false;$j=$n-1;
+        for($i=0;$i<$n;$i++){
+            $xi=$poly[$i][0];$yi=$poly[$i][1];$xj=$poly[$j][0];$yj=$poly[$j][1];
+            if((($yi>$lat)!==($yj>$lat))&&($lng<($xj-$xi)*($lat-$yi)/($yj-$yi)+$xi))$inside=!$inside;
+            $j=$i;
+        }
+        return $inside;
+    }
+
+    // Reset
+    $pdo->exec("UPDATE plex_properties SET floodplain_risk='none'");
+
+    $total_checked = 0;
+    $matches = []; // pid => risk
+
+    // For each polygon, SQL-fetch only lots within its bbox, then do pip
+    foreach ($poly_boxes as $pb) {
+        $stmt = $pdo->prepare("
+            SELECT pid, lat, lng FROM plex_properties
+            WHERE lat BETWEEN ? AND ?
+              AND lng BETWEEN ? AND ?
+              AND lat IS NOT NULL
+        ");
+        $stmt->execute([$pb['minlat'], $pb['maxlat'], $pb['minlng'], $pb['maxlng']]);
+        $candidates = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $total_checked += count($candidates);
+
+        foreach ($candidates as $lot) {
+            $lat=(float)$lot['lat']; $lng=(float)$lot['lng'];
+            if (pip_fl($lat,$lng,$pb['coords'])) {
+                $pid = $lot['pid'];
+                // High risk overrides low
+                if (!isset($matches[$pid]) || $pb['risk']==='high') {
+                    $matches[$pid] = $pb['risk'];
+                }
+            }
+        }
+    }
+
+    // Batch update
+    $sh = $pdo->prepare("UPDATE plex_properties SET floodplain_risk='high' WHERE pid=?");
+    $sl = $pdo->prepare("UPDATE plex_properties SET floodplain_risk='low'  WHERE pid=?");
+    $high=$low=0;
+    foreach ($matches as $pid=>$risk) {
+        if ($risk==='high'){$sh->execute([$pid]);$high++;}
+        else               {$sl->execute([$pid]);$low++;}
+    }
+
+    echo json_encode([
+        'success'       => true,
+        'lots_checked'  => $total_checked,
+        'high_risk'     => $high,
+        'low_risk'      => $low,
+        'polygons'      => count($poly_boxes),
+    ]); exit;
+}
+
+// Neighbourhood boundary import — COV local-area-boundary.csv
+// Point-in-polygon for all 64,000 lots, sets neighbourhood_slug to human-readable format
+// e.g. nb_012 → renfrew-collingwood
+if (isset($_POST['import_neighbourhood_boundary']) && isset($_FILES['boundary_csv']) && $_FILES['boundary_csv']['error']===UPLOAD_ERR_OK) {
+    header('Content-Type: application/json');
+    ini_set('memory_limit','256M'); ini_set('max_execution_time',180);
+
+    // Strip BOM, detect delimiter
+    $raw = file_get_contents($_FILES['boundary_csv']['tmp_name']);
+    $raw = preg_replace('/^\xEF\xBB\xBF/', '', $raw);
+    $first_line = strtok($raw, "\n");
+    $delim = (substr_count($first_line, ';') > substr_count($first_line, ',')) ? ';' : ',';
+    file_put_contents($_FILES['boundary_csv']['tmp_name'], $raw);
+
+    $handle = fopen($_FILES['boundary_csv']['tmp_name'], 'r');
+    $raw_headers = fgetcsv($handle, 0, $delim);
+    $headers = array_map(fn($h) => strtolower(trim($h)), $raw_headers);
+    $cols = array_flip($headers);
+
+    if (!isset($cols['name']) || !isset($cols['geom'])) {
+        echo json_encode(['success'=>false,'error'=>'Missing Name or Geom columns. Found: '.implode(', ',$headers)]);
+        fclose($handle); exit;
+    }
+
+    // Name → slug conversion
+    function name_to_slug(string $name): string {
+        $slug = strtolower(trim($name));
+        $slug = str_replace(['é','è','ê'], 'e', $slug);
+        $slug = preg_replace('/[^a-z0-9]+/', '-', $slug);
+        return trim($slug, '-');
+    }
+
+    // Point-in-polygon
+    function pip_nb(float $lat, float $lng, array $poly): bool {
+        $n=count($poly); $inside=false; $j=$n-1;
+        for ($i=0;$i<$n;$i++) {
+            $xi=$poly[$i][0]; $yi=$poly[$i][1]; $xj=$poly[$j][0]; $yj=$poly[$j][1];
+            if ((($yi>$lat)!==($yj>$lat)) && ($lng<($xj-$xi)*($lat-$yi)/($yj-$yi)+$xi)) $inside=!$inside;
+            $j=$i;
+        }
+        return $inside;
+    }
+
+    // Parse all 22 neighbourhood polygons + compute bboxes
+    $neighbourhoods = [];
+    while (($row = fgetcsv($handle, 0, $delim)) !== false) {
+        $name = trim($row[$cols['name']] ?? '');
+        $geom_raw = trim($row[$cols['geom']] ?? '');
+        if (!$name || !$geom_raw) continue;
+
+        $geom = json_decode($geom_raw, true);
+        if (!$geom || $geom['type'] !== 'Polygon') continue;
+
+        $coords = array_map(fn($c) => [$c[0], $c[1]], $geom['coordinates'][0]);
+        $lngs = array_column($coords, 0);
+        $lats  = array_column($coords, 1);
+
+        $neighbourhoods[] = [
+            'name'   => $name,
+            'slug'   => name_to_slug($name),
+            'coords' => $coords,
+            'minlat' => min($lats) - 0.0002,
+            'maxlat' => max($lats) + 0.0002,
+            'minlng' => min($lngs) - 0.0002,
+            'maxlng' => max($lngs) + 0.0002,
+        ];
+    }
+    fclose($handle);
+
+    if (empty($neighbourhoods)) {
+        echo json_encode(['success'=>false,'error'=>'No valid neighbourhood polygons found']); exit;
+    }
+
+    // For each neighbourhood, SQL-fetch candidate lots, run pip
+    $stmt_upd = $pdo->prepare("UPDATE plex_properties SET neighbourhood_slug=? WHERE pid=?");
+    $updated = 0; $unmatched = 0;
+    $matched_pids = [];
+
+    foreach ($neighbourhoods as $nb) {
+        // SQL bbox pre-filter — only fetch lots in this neighbourhood's area
+        $stmt = $pdo->prepare("
+            SELECT pid, lat, lng FROM plex_properties
+            WHERE lat BETWEEN ? AND ?
+              AND lng BETWEEN ? AND ?
+              AND lat IS NOT NULL
+        ");
+        $stmt->execute([$nb['minlat'], $nb['maxlat'], $nb['minlng'], $nb['maxlng']]);
+        $candidates = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        foreach ($candidates as $lot) {
+            if (isset($matched_pids[$lot['pid']])) continue; // already matched
+            if (pip_nb((float)$lot['lat'], (float)$lot['lng'], $nb['coords'])) {
+                $stmt_upd->execute([$nb['slug'], $lot['pid']]);
+                $matched_pids[$lot['pid']] = $nb['slug'];
+                $updated++;
+            }
+        }
+    }
+
+    // Count unmatched (lots outside all polygons — rare edge cases)
+    $total = (int)$pdo->query("SELECT COUNT(*) FROM plex_properties WHERE lat IS NOT NULL")->fetchColumn();
+    $unmatched = $total - $updated;
+
+    echo json_encode([
+        'success'      => true,
+        'neighbourhoods' => count($neighbourhoods),
+        'lots_updated' => $updated,
+        'unmatched'    => $unmatched,
+        'note'         => "neighbourhood_slug now set to human-readable format (e.g. renfrew-collingwood)",
+        'log'          => array_map(fn($nb) => $nb['slug'], $neighbourhoods),
+    ]); exit;
+}
+
+// Transit import — stops.txt
+if (isset($_POST['import_transit']) && isset($_FILES['transit_csv']) && $_FILES['transit_csv']['error']===UPLOAD_ERR_OK) {
+    header('Content-Type: application/json');
+    $handle=fopen($_FILES['transit_csv']['tmp_name'],'r');
+    $headers=array_map(fn($h)=>strtolower(trim($h)),fgetcsv($handle));
+    $cols=array_flip($headers);
+    if(!isset($cols['stop_lat'])||!isset($cols['stop_lon'])){echo json_encode(['success'=>false,'error'=>'Missing stop_lat or stop_lon columns']);fclose($handle);exit;}
+    $pdo->exec("TRUNCATE TABLE transit_stops");
+    $stmt=$pdo->prepare("INSERT INTO transit_stops (stop_id,stop_name,lat,lng,is_ftn,updated_at) VALUES (?,?,?,?,1,NOW()) ON DUPLICATE KEY UPDATE stop_name=VALUES(stop_name),lat=VALUES(lat),lng=VALUES(lng),updated_at=NOW()");
+    $count=0;
+    while(($row=fgetcsv($handle))!==false){
+        $sid=trim($row[$cols['stop_id']]??'');
+        $sname=trim($row[$cols['stop_name']]??'');
+        $lat=(float)($row[$cols['stop_lat']]??0);
+        $lng=(float)($row[$cols['stop_lon']]??0);
+        if(!$sid||!$lat||!$lng)continue;
+        $stmt->execute([$sid,$sname,$lat,$lng]);$count++;
+    }
+    fclose($handle);
+    echo json_encode(['success'=>true,'imported'=>$count]); exit;
+}
+
+// Lanes import — COV lanes CSV
+if (isset($_POST['import_lanes']) && isset($_FILES['lanes_csv']) && $_FILES['lanes_csv']['error']===UPLOAD_ERR_OK) {
+    header('Content-Type: application/json');
+    $raw=file_get_contents($_FILES['lanes_csv']['tmp_name']);
+    $rows=json_decode($raw,true);
+    if(!$rows) {
+        // Try CSV
+        $handle=fopen($_FILES['lanes_csv']['tmp_name'],'r');
+        $headers=array_map(fn($h)=>strtolower(trim($h)),fgetcsv($handle));
+        $cols=array_flip($headers);
+        $rows=[];
+        while(($row=fgetcsv($handle))!==false){
+            $rows[]=['lat'=>$row[$cols['latitude']??$cols['lat']??0]??0,'lng'=>$row[$cols['longitude']??$cols['lng']??0]??0];
+        }
+        fclose($handle);
+    }
+    $pdo->exec("TRUNCATE TABLE lane_segments");
+    $stmt=$pdo->prepare("INSERT INTO lane_segments (lat,lng,updated_at) VALUES (?,?,NOW())");
+    $count=0;
+    foreach($rows as $r){
+        $lat=(float)($r['lat']??$r['latitude']??0);
+        $lng=(float)($r['lng']??$r['longitude']??0);
+        if(!$lat||!$lng)continue;
+        $stmt->execute([$lat,$lng]);$count++;
+    }
+    echo json_encode(['success'=>true,'imported'=>$count]); exit;
+}
+
+// Permits import — A_Permit_2026 CSV
+if (isset($_POST['import_permits']) && isset($_FILES['permits_csv']) && $_FILES['permits_csv']['error']===UPLOAD_ERR_OK) {
+    header('Content-Type: application/json');
+    $handle=fopen($_FILES['permits_csv']['tmp_name'],'r');
+    $headers=array_map(fn($h)=>strtolower(trim(str_replace([' ','-'],['_','_'],$h))),fgetcsv($handle));
+    $cols=array_flip($headers);
+    $stmt=$pdo->prepare("INSERT INTO A_Permit_2026 (permit_number,address,latitude,longitude,permit_type,issue_date,created_at) VALUES (?,?,?,?,?,?,NOW()) ON DUPLICATE KEY UPDATE address=VALUES(address),latitude=VALUES(latitude),longitude=VALUES(longitude)");
+    $count=0;$skip=0;
+    while(($row=fgetcsv($handle))!==false){
+        $pnum=trim($row[$cols['permit_number']??$cols['permitnumber']??$cols['permit']??0]??'');
+        $addr=trim($row[$cols['address']??$cols['civic_address']??0]??'');
+        $lat=(float)($row[$cols['latitude']??$cols['lat']??0]??0);
+        $lng=(float)($row[$cols['longitude']??$cols['lon']??$cols['lng']??0]??0);
+        $type=trim($row[$cols['permit_type']??$cols['type']??$cols['work_type']??0]??'');
+        $date=trim($row[$cols['issue_date']??$cols['issued_date']??$cols['date']??0]??'');
+        if(!$addr){$skip++;continue;}
+        $stmt->execute([$pnum,$addr,$lat,$lng,$type,$date?:null]);$count++;
+    }
+    fclose($handle);
+    echo json_encode(['success'=>true,'imported'=>$count,'skipped'=>$skip]); exit;
+}
+
+// COV property tax CSV import — streams to existing script logic
+if (isset($_POST['import_cov_csv']) && isset($_FILES['cov_csv'])) {
+    header('Content-Type: application/json');
+    $f = $_FILES['cov_csv'];
+    if ($f['error'] !== UPLOAD_ERR_OK) { echo json_encode(['success'=>false,'error'=>'Upload error: '.$f['error']]); exit; }
+    // Save to data folder then delegate to existing import script
+    $dest = __DIR__ . '/data/property-tax-report.csv';
+    if (!is_dir(__DIR__.'/data')) mkdir(__DIR__.'/data', 0755, true);
+    if (!move_uploaded_file($f['tmp_name'], $dest)) { echo json_encode(['success'=>false,'error'=>'Could not save file to /data/ folder']); exit; }
+    // Run import_cov_csv.php as include (it reads from /data/property-tax-report.csv)
+    ob_start();
+    $imported = 0; $skipped = 0;
+    try {
+        // Replicate core logic inline — read CSV, insert/update plex_properties
+        ini_set('max_execution_time', 300);
+        $handle = fopen($dest, 'r');
+        $headers = array_map(fn($h)=>strtolower(trim($h)), fgetcsv($handle));
+        $cols = array_flip($headers);
+        $stmt = $pdo->prepare("INSERT INTO plex_properties (pid,address,zoning,neighbourhood_slug,assessed_land_value,assessed_improvement_value,assessed_total_value,assessment_year) VALUES (?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE address=VALUES(address),zoning=VALUES(zoning),assessed_land_value=VALUES(assessed_land_value),assessment_year=VALUES(assessment_year)");
+        while (($row = fgetcsv($handle)) !== false) {
+            $pid = trim($row[$cols['pid']??0]??'');
+            if (!$pid) { $skipped++; continue; }
+            $pid_fmt = preg_replace('/[^0-9]/','',$pid);
+            if (strlen($pid_fmt)===9) $pid_fmt = substr($pid_fmt,0,3).'-'.substr($pid_fmt,3,3).'-'.substr($pid_fmt,6,3);
+            $addr = trim($row[$cols['to_civic_number']??$cols['from_civic_number']??0]??'').' '.trim($row[$cols['street_name']??0]??'');
+            $zone = trim($row[$cols['zoning_district']??0]??'');
+            $nb   = trim($row[$cols['neighbourhood_code']??0]??'');
+            $lv   = (int)($row[$cols['current_land_value']??0]??0);
+            $iv   = (int)($row[$cols['current_improvement_value']??0]??0);
+            $tv   = $lv + $iv;
+            $yr   = (int)($row[$cols['tax_assessment_year']??$cols['report_year']??0]??0);
+            $stmt->execute([$pid_fmt, trim($addr), $zone, 'nb_'.$nb, $lv, $iv, $tv, $yr?:null]);
+            $imported++;
+        }
+        fclose($handle);
+    } catch (Exception $e) { ob_end_clean(); echo json_encode(['success'=>false,'error'=>$e->getMessage()]); exit; }
+    ob_end_clean();
+    echo json_encode(['success'=>true,'imported'=>$imported,'skipped'=>$skipped]); exit;
+}
+
+// COV parcel polygons import
+if (isset($_POST['import_parcel_polygons']) && isset($_FILES['parcel_csv'])) {
+    header('Content-Type: application/json');
+    $f = $_FILES['parcel_csv'];
+    if ($f['error'] !== UPLOAD_ERR_OK) { echo json_encode(['success'=>false,'error'=>'Upload error: '.$f['error']]); exit; }
+    ini_set('max_execution_time', 300); ini_set('memory_limit','256M');
+    $handle = fopen($f['tmp_name'], 'r');
+    $headers = array_map(fn($h)=>strtolower(trim($h)), fgetcsv($handle));
+    $cols = array_flip($headers);
+    $stmt = $pdo->prepare("UPDATE plex_properties SET lat=?,lng=?,lot_area_sqm=?,lot_width_m=? WHERE pid=?");
+    $updated=0; $skipped=0;
+    while (($row=fgetcsv($handle))!==false) {
+        $site_id = preg_replace('/[^0-9]/','',trim($row[$cols['site_id']??0]??''));
+        if (!$site_id){$skipped++;continue;}
+        $pid = substr($site_id,0,3).'-'.substr($site_id,3,3).'-'.substr($site_id,6,3);
+        $geo = json_decode($row[$cols['geo_point_2d']??0]??'{}',true);
+        $lat = (float)($geo['lat']??0); $lng = (float)($geo['lon']??0);
+        if (!$lat||!$lng){$skipped++;continue;}
+        // Derive area from geom if available — fallback to 0
+        $area=0; $width=0;
+        $geom_raw = $row[$cols['geom']??0]??'';
+        if ($geom_raw) {
+            $geom=json_decode($geom_raw,true);
+            if ($geom&&isset($geom['coordinates'][0])) {
+                $pts=$geom['coordinates'][0]; $n=count($pts);
+                $a=0;
+                for($i=0;$i<$n-1;$i++) $a+=($pts[$i][0]*$pts[$i+1][1]-$pts[$i+1][0]*$pts[$i][1]);
+                $area=abs($a/2)*111320*111320*cos(deg2rad($lat));
+                // Frontage = min bounding box side
+                $lons=array_column($pts,0); $lats_=array_column($pts,1);
+                $dlon=(max($lons)-min($lons))*111320*cos(deg2rad($lat));
+                $dlat=(max($lats_)-min($lats_))*111320;
+                $width=round(min($dlon,$dlat),2);
+            }
+        }
+        $stmt->execute([$lat,$lng,round($area,2),$width,$pid]);
+        $updated++;
+    }
+    fclose($handle);
+    echo json_encode(['success'=>true,'imported'=>$updated,'skipped'=>$skipped]); exit;
 }
 
 // ── Submission approval actions ───────────────────────────────────────────────
@@ -1414,6 +1951,10 @@ $with_coords = count(array_filter($listings, function($r) { return !empty($r['la
         <i class="fas fa-map-marked-alt"></i>&nbsp;Plex Data
         <span style="background:#c9a84c;color:#fff;font-size:9px;font-weight:800;padding:2px 6px;border-radius:10px;letter-spacing:.3px;">W.I.N</span>
     </a>
+    <a href="admin.php?tab=imports" style="padding:14px 20px;font-size:13px;font-weight:700;text-decoration:none;border-bottom:3px solid <?= $active_tab==='imports' ? '#c9a84c' : 'transparent' ?>;color:<?= $active_tab==='imports' ? '#c9a84c' : '#c9a84c' ?>;display:flex;align-items:center;gap:6px;">
+        <i class="fas fa-file-import"></i>&nbsp;Data Import
+        <span style="background:#7c3aed;color:#fff;font-size:9px;font-weight:800;padding:2px 6px;border-radius:10px;letter-spacing:.3px;">NEW</span>
+    </a>
 </div>
 
 <!-- Main body -->
@@ -1449,7 +1990,7 @@ $with_coords = count(array_filter($listings, function($r) { return !empty($r['la
                 <th>Company</th>
                 <th>Email</th>
                 <th>Phone</th>
-                <th>Projects</th>
+                <th>User Type</th>
                 <th>Email</th>
                 <th>Registered</th>
                 <th>Last Login</th>
@@ -1469,9 +2010,27 @@ $with_coords = count(array_filter($listings, function($r) { return !empty($r['la
             <td><?= htmlspecialchars($dev['company_name'] ?? '—') ?></td>
             <td style="font-size:12px;color:#555;"><?= htmlspecialchars($dev['email']) ?></td>
             <td style="font-size:12px;color:#555;"><?= htmlspecialchars($dev['phone'] ?? '—') ?></td>
-            <td style="font-size:12px;color:#666;max-width:200px;">
-                <?php $proj = trim($dev['projects'] ?? ''); ?>
-                <?= $proj ? htmlspecialchars(substr($proj, 0, 80)) . (strlen($proj)>80 ? '…' : '') : '—' ?>
+            <td>
+                <?php
+                $ut = $dev['user_type'] ?? 'builder';
+                $ut_styles = [
+                    'builder'  => 'background:#e0f2fe;color:#0369a1;',
+                    'investor' => 'background:#ede9fe;color:#6d28d9;',
+                    'realtor'  => 'background:#dcfce7;color:#166534;',
+                    'broker'   => 'background:#fef3c7;color:#92400e;',
+                ];
+                $ut_style = $ut_styles[$ut] ?? 'background:#f1f5f9;color:#475569;';
+                ?>
+                <form method="POST" style="display:inline-flex;align-items:center;gap:6px;">
+                    <input type="hidden" name="dev_id" value="<?= $dev['id'] ?>">
+                    <select name="user_type" onchange="this.form.submit()" style="font-size:11px;padding:3px 8px;border-radius:20px;border:1px solid #ddd;<?= $ut_style ?>font-weight:700;cursor:pointer;background-color:inherit;">
+                        <option value="builder"  <?= $ut==='builder'  ? 'selected' : '' ?>>Builder</option>
+                        <option value="investor" <?= $ut==='investor' ? 'selected' : '' ?>>Investor</option>
+                        <option value="realtor"  <?= $ut==='realtor'  ? 'selected' : '' ?>>Realtor</option>
+                        <option value="broker"   <?= $ut==='broker'   ? 'selected' : '' ?>>Broker</option>
+                    </select>
+                    <button type="submit" name="dev_set_type" style="display:none;"></button>
+                </form>
             </td>
             <td>
                 <?php if (!empty($dev['email_verified'])): ?>
@@ -2972,6 +3531,251 @@ $with_coords = count(array_filter($listings, function($r) { return !empty($r['la
 </div><!-- /flex row -->
 </div><!-- /events tab -->
 
+
+<?php elseif ($active_tab === 'imports'): ?>
+<div style="flex:1;padding:28px;max-width:900px;">
+
+<?php if (!empty($message)): ?>
+<div class="admin-message" style="margin-bottom:20px;"><?= $message ?></div>
+<?php endif; ?>
+
+<div style="margin-bottom:28px;">
+    <h2 style="font-size:20px;font-weight:800;color:#002446;margin:0 0 4px;">Data Import Centre</h2>
+    <p style="font-size:13px;color:#888;margin:0;">All COV open data, TransLink, and constraint imports in one place.</p>
+</div>
+
+<?php
+$sections = [
+    ['id'=>1,'icon'=>'fa-city','bg'=>'#e0f2fe','ic'=>'#0369a1','title'=>'COV Property Tax Data','sub'=>'plex_properties — R1-1 lot dimensions, zoning, assessed values','freq'=>'Annual — January'],
+    ['id'=>2,'icon'=>'fa-train','bg'=>'#fee2e2','ic'=>'#dc2626','title'=>'TransLink FTN Stops','sub'=>'transit_stops — SkyTrain + frequent bus network stations','freq'=>'Annual'],
+    ['id'=>3,'icon'=>'fa-road','bg'=>'#f0fdf4','ic'=>'#16a34a','title'=>'COV Lane Segments','sub'=>'lane_segments — rear lane centroids for lane_access spatial check','freq'=>'Annual'],
+    ['id'=>4,'icon'=>'fa-star','bg'=>'#fefce8','ic'=>'#ca8a04','title'=>'COV Building Permits','sub'=>'A_Permit_2026 — approved building permits (gold star pins on map)','freq'=>'Monthly'],
+    ['id'=>5,'icon'=>'fa-landmark','bg'=>'#eff6ff','ic'=>'#1d4ed8','title'=>'Heritage Register','sub'=>'plex_properties.heritage_category — Category A, B, C designation','freq'=>'Semi-annual'],
+    ['id'=>6,'icon'=>'fa-layer-group','bg'=>'#fef3c7','ic'=>'#92400e','title'=>'Peat Zone','sub'=>'plex_properties.peat_zone — Vancouver peat bog zones','freq'=>'One-time'],
+    ['id'=>7,'icon'=>'fa-water','bg'=>'#eff6ff','ic'=>'#2563eb','title'=>'Floodplain','sub'=>'plex_properties.floodplain_risk — COV designated + Still Creek','freq'=>'One-time'],
+    ['id'=>8,'icon'=>'fa-map','bg'=>'#f0fdf4','ic'=>'#16a34a','title'=>'Neighbourhood Boundaries','sub'=>'plex_properties.neighbourhood_slug — fixes all 64,000 lot assignments','freq'=>'Annual'],
+];
+foreach ($sections as $s):
+?>
+<div style="background:#fff;border-radius:12px;border:1px solid #e8e4dd;margin-bottom:16px;overflow:hidden;">
+    <div style="display:flex;align-items:center;gap:14px;padding:18px 22px;border-bottom:1px solid #f0f0f0;cursor:pointer;user-select:none;" onclick="impToggle(<?= $s['id'] ?>)">
+        <div style="width:38px;height:38px;border-radius:9px;background:<?= $s['bg'] ?>;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+            <i class="fas <?= $s['icon'] ?>" style="color:<?= $s['ic'] ?>;font-size:16px;"></i>
+        </div>
+        <div style="flex:1;">
+            <div style="font-size:15px;font-weight:700;color:#002446;"><?= $s['title'] ?></div>
+            <div style="font-size:12px;color:#888;margin-top:2px;"><?= $s['sub'] ?></div>
+        </div>
+        <span style="font-size:10px;font-weight:700;padding:3px 10px;border-radius:12px;background:#f1f5f9;color:#475569;margin-right:10px;white-space:nowrap;"><?= $s['freq'] ?></span>
+        <i class="fas fa-chevron-down" id="chev-<?= $s['id'] ?>" style="color:#aaa;font-size:12px;transition:transform .2s;"></i>
+    </div>
+    <div id="imp-body-<?= $s['id'] ?>" style="display:none;">
+        <div style="padding:22px;">
+
+<?php if ($s['id']===1): ?>
+            <div style="font-size:12px;color:#666;background:#f9f6f0;border-radius:6px;padding:10px 14px;margin-bottom:12px;border-left:3px solid #c9a84c;line-height:1.6;">
+                Source: <code style="background:#e8e4dd;padding:1px 6px;border-radius:4px;">opendata.vancouver.ca</code> → <strong>property-tax-report</strong> → filter REPORT_YEAR = current year → Export CSV<br>
+                Then download <strong>property-parcel-polygons.csv</strong> (no filter needed) for coordinates.
+            </div>
+            <form id="frm-1a" onsubmit="return false;">
+                <input type="hidden" name="import_cov_csv" value="1">
+                <div style="margin-bottom:16px;">
+                    <label style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;display:block;margin-bottom:5px;">property-tax-report.csv</label>
+                    <div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;">
+                        <input type="file" name="cov_csv" accept=".csv" required style="flex:1;padding:9px 12px;border:1.5px dashed #c9a84c;border-radius:8px;background:#fffbf0;font-size:13px;">
+                        <button type="button" onclick="doImport('1a')" style="background:#002446;color:#c9a84c;border:none;padding:10px 22px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Import Tax Data</button>
+                    </div>
+                </div>
+            </form>
+            <form id="frm-1b" onsubmit="return false;">
+                <input type="hidden" name="import_parcel_polygons" value="1">
+                <div style="margin-bottom:16px;">
+                    <label style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;display:block;margin-bottom:5px;">property-parcel-polygons.csv</label>
+                    <div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;">
+                        <input type="file" name="parcel_csv" accept=".csv" required style="flex:1;padding:9px 12px;border:1.5px dashed #c9a84c;border-radius:8px;background:#fffbf0;font-size:13px;">
+                        <button type="button" onclick="doImport('1b')" style="background:#002446;color:#c9a84c;border:none;padding:10px 22px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Import Parcel Polygons</button>
+                    </div>
+                </div>
+            </form>
+            <div id="res-1a" style="display:none;margin-top:4px;margin-bottom:12px;font-size:12px;padding:12px;border-radius:8px;font-family:monospace;white-space:pre-wrap;max-height:200px;overflow-y:auto;"></div>
+            <div id="res-1b" style="display:none;margin-top:4px;margin-bottom:12px;font-size:12px;padding:12px;border-radius:8px;font-family:monospace;white-space:pre-wrap;max-height:200px;overflow-y:auto;"></div>
+            <div style="background:#f0f4f8;border-radius:6px;padding:12px 16px;font-size:12px;color:#666;">
+                <strong style="color:#002446;">Large files?</strong> Run via SSH on Hostinger instead:<br>
+                <code style="font-size:11px;line-height:2;color:#002446;">
+                    php /home/u990588858/domains/wynston.ca/public_html/import_cov_csv.php<br>
+                    php /home/u990588858/domains/wynston.ca/public_html/import_parcel_polygons.php
+                </code>
+            </div>
+
+<?php elseif ($s['id']===2): ?>
+            <div style="font-size:12px;color:#666;background:#f9f6f0;border-radius:6px;padding:10px 14px;margin-bottom:12px;border-left:3px solid #c9a84c;line-height:1.6;">
+                Source: translink.ca GTFS → Download zip → extract <code style="background:#e8e4dd;padding:1px 6px;border-radius:4px;">stops.txt</code><br>
+                Columns needed: stop_id, stop_name, stop_lat, stop_lon
+            </div>
+            <form id="frm-2" onsubmit="return false;">
+                <input type="hidden" name="import_transit" value="1">
+                <div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;">
+                    <div style="flex:1;"><label style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;display:block;margin-bottom:5px;">stops.txt</label>
+                    <input type="file" name="transit_csv" accept=".txt,.csv" required style="width:100%;padding:9px 12px;border:1.5px dashed #c9a84c;border-radius:8px;background:#fffbf0;font-size:13px;"></div>
+                    <button type="button" onclick="doImport(2)" style="background:#002446;color:#c9a84c;border:none;padding:10px 22px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Import</button>
+                </div>
+            </form>
+            <div id="res-2" style="display:none;margin-top:12px;font-size:12px;padding:12px;border-radius:8px;font-family:monospace;white-space:pre-wrap;max-height:200px;overflow-y:auto;"></div>
+
+<?php elseif ($s['id']===3): ?>
+            <div style="font-size:12px;color:#666;background:#f9f6f0;border-radius:6px;padding:10px 14px;margin-bottom:12px;border-left:3px solid #c9a84c;line-height:1.6;">
+                Source: <code style="background:#e8e4dd;padding:1px 6px;border-radius:4px;">opendata.vancouver.ca</code> → search <strong>"lanes"</strong> → Export CSV or GeoJSON<br>
+                Columns needed: latitude, longitude (centroids)
+            </div>
+            <form id="frm-3" onsubmit="return false;">
+                <input type="hidden" name="import_lanes" value="1">
+                <div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;">
+                    <div style="flex:1;"><label style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;display:block;margin-bottom:5px;">Lanes CSV or GeoJSON</label>
+                    <input type="file" name="lanes_csv" accept=".csv,.geojson,.json" required style="width:100%;padding:9px 12px;border:1.5px dashed #c9a84c;border-radius:8px;background:#fffbf0;font-size:13px;"></div>
+                    <button type="button" onclick="doImport(3)" style="background:#002446;color:#c9a84c;border:none;padding:10px 22px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Import</button>
+                </div>
+            </form>
+            <div id="res-3" style="display:none;margin-top:12px;font-size:12px;padding:12px;border-radius:8px;font-family:monospace;white-space:pre-wrap;max-height:200px;overflow-y:auto;"></div>
+
+<?php elseif ($s['id']===4): ?>
+            <div style="font-size:12px;color:#666;background:#f9f6f0;border-radius:6px;padding:10px 14px;margin-bottom:12px;border-left:3px solid #c9a84c;line-height:1.6;">
+                Source: <code style="background:#e8e4dd;padding:1px 6px;border-radius:4px;">opendata.vancouver.ca</code> → <strong>issued-building-permits</strong> → filter New Building → Export CSV
+            </div>
+            <form id="frm-4" onsubmit="return false;">
+                <input type="hidden" name="import_permits" value="1">
+                <div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;">
+                    <div style="flex:1;"><label style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;display:block;margin-bottom:5px;">Building Permits CSV</label>
+                    <input type="file" name="permits_csv" accept=".csv" required style="width:100%;padding:9px 12px;border:1.5px dashed #c9a84c;border-radius:8px;background:#fffbf0;font-size:13px;"></div>
+                    <button type="button" onclick="doImport(4)" style="background:#002446;color:#c9a84c;border:none;padding:10px 22px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Import</button>
+                </div>
+            </form>
+            <div id="res-4" style="display:none;margin-top:12px;font-size:12px;padding:12px;border-radius:8px;font-family:monospace;white-space:pre-wrap;max-height:200px;overflow-y:auto;"></div>
+            <div style="margin-top:14px;background:#f9f6f0;border-radius:8px;padding:14px;">
+                <div style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Run after import — refresh has_active_permit flags</div>
+                <code style="font-size:11px;display:block;line-height:1.8;color:#002446;">UPDATE plex_properties SET has_active_permit = 0;<br>UPDATE plex_properties p INNER JOIN A_Permit_2026 a ON ABS(p.lat - a.latitude) &lt; 0.0005 AND ABS(p.lng - a.longitude) &lt; 0.0005 SET p.has_active_permit = 1;</code>
+            </div>
+
+<?php elseif ($s['id']===5): ?>
+            <div style="font-size:12px;color:#666;background:#f9f6f0;border-radius:6px;padding:10px 14px;margin-bottom:12px;border-left:3px solid #c9a84c;line-height:1.6;">
+                Source: <code style="background:#e8e4dd;padding:1px 6px;border-radius:4px;">opendata.vancouver.ca</code> → search <strong>"heritage register"</strong> → Export CSV<br>
+                Columns needed: ADDRESS and CATEGORY (A / B / C). Resets all lots to 'none' first.
+            </div>
+            <form id="frm-5" onsubmit="return false;">
+                <input type="hidden" name="import_heritage" value="1">
+                <div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;">
+                    <div style="flex:1;"><label style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;display:block;margin-bottom:5px;">Heritage Register CSV</label>
+                    <input type="file" name="heritage_csv" accept=".csv" required style="width:100%;padding:9px 12px;border:1.5px dashed #c9a84c;border-radius:8px;background:#fffbf0;font-size:13px;"></div>
+                    <button type="button" onclick="doImport(5)" style="background:#002446;color:#c9a84c;border:none;padding:10px 22px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Import</button>
+                </div>
+            </form>
+            <div id="res-5" style="display:none;margin-top:12px;font-size:12px;padding:12px;border-radius:8px;font-family:monospace;white-space:pre-wrap;max-height:200px;overflow-y:auto;"></div>
+
+<?php elseif ($s['id']===6): ?>
+            <div style="font-size:12px;color:#666;background:#f9f6f0;border-radius:6px;padding:10px 14px;margin-bottom:12px;border-left:3px solid #c9a84c;line-height:1.6;">
+                Source: <code style="background:#e8e4dd;padding:1px 6px;border-radius:4px;">opendata.vancouver.ca</code> → search <strong>"soil survey"</strong> → Export GeoJSON<br>
+                Spatial check against all 64,000 lots. Takes 30–60 seconds.<br>
+                Or use built-in approximate zones (Cambie/Marpole, Knight/Kensington, South Vancouver).
+            </div>
+            <form id="frm-6" onsubmit="return false;">
+                <input type="hidden" name="import_peat" value="1">
+                <div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
+                    <div style="flex:1;"><label style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;display:block;margin-bottom:5px;">Peat Zone GeoJSON (optional)</label>
+                    <input type="file" name="peat_geojson" accept=".geojson,.json" style="width:100%;padding:9px 12px;border:1.5px dashed #c9a84c;border-radius:8px;background:#fffbf0;font-size:13px;"></div>
+                    <button type="button" onclick="doImport(6)" style="background:#002446;color:#c9a84c;border:none;padding:10px 22px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Import GeoJSON</button>
+                </div>
+                <div style="text-align:center;color:#aaa;font-size:12px;margin-bottom:10px;">— or —</div>
+                <button type="button" onclick="doImport(6,{peat_builtin:'1'})" style="background:#f9f6f0;color:#002446;border:1px solid #e8e4dd;padding:10px 22px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;width:100%;">Use Built-in Approximate Zones</button>
+            </form>
+            <div id="res-6" style="display:none;margin-top:12px;font-size:12px;padding:12px;border-radius:8px;font-family:monospace;white-space:pre-wrap;max-height:200px;overflow-y:auto;"></div>
+
+
+
+<?php elseif ($s['id']===7): ?>
+            <div style="font-size:12px;color:#666;background:#f9f6f0;border-radius:6px;padding:10px 14px;margin-bottom:12px;border-left:3px solid #c9a84c;line-height:1.6;">
+                Upload the combined floodplain GeoJSON (COV Designated Floodplain + Still Creek).<br>
+                Already downloaded from VanMap — layer IDs 186 and 33.<br>
+                Spatial check against all 64,000 lots. Takes ~30 seconds.
+            </div>
+            <form id="frm-7" onsubmit="return false;">
+                <input type="hidden" name="import_floodplain" value="1">
+                <div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;">
+                    <div style="flex:1;"><label style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;display:block;margin-bottom:5px;">Floodplain GeoJSON</label>
+                    <input type="file" name="flood_geojson" accept=".geojson,.json" required style="width:100%;padding:9px 12px;border:1.5px dashed #c9a84c;border-radius:8px;background:#fffbf0;font-size:13px;"></div>
+                    <button type="button" onclick="doImport(7)" style="background:#002446;color:#c9a84c;border:none;padding:10px 22px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Import</button>
+                </div>
+            </form>
+            <div id="res-7" style="display:none;margin-top:12px;font-size:12px;padding:12px;border-radius:8px;font-family:monospace;white-space:pre-wrap;max-height:200px;overflow-y:auto;"></div>
+
+<?php elseif ($s['id']===8): ?>
+            <div style="font-size:12px;color:#666;background:#f9f6f0;border-radius:6px;padding:10px 14px;margin-bottom:12px;border-left:3px solid #c9a84c;line-height:1.6;">
+                Source: <code style="background:#e8e4dd;padding:1px 6px;border-radius:4px;">opendata.vancouver.ca</code> → <strong>local-area-boundary</strong> → Export CSV<br>
+                Updates <code style="background:#e8e4dd;padding:1px 6px;border-radius:4px;">neighbourhood_slug</code> for all 64,000 lots using exact COV polygon boundaries.<br>
+                Replaces <code style="background:#e8e4dd;padding:1px 6px;border-radius:4px;">nb_012</code> format with <code style="background:#e8e4dd;padding:1px 6px;border-radius:4px;">renfrew-collingwood</code> — improves market data joins and Outlook accuracy.
+            </div>
+            <form id="frm-8" onsubmit="return false;">
+                <input type="hidden" name="import_neighbourhood_boundary" value="1">
+                <div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;">
+                    <div style="flex:1;"><label style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;display:block;margin-bottom:5px;">local-area-boundary.csv</label>
+                    <input type="file" name="boundary_csv" accept=".csv" required style="width:100%;padding:9px 12px;border:1.5px dashed #c9a84c;border-radius:8px;background:#fffbf0;font-size:13px;"></div>
+                    <button type="button" onclick="doImport(8)" style="background:#002446;color:#c9a84c;border:none;padding:10px 22px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Import</button>
+                </div>
+            </form>
+            <div id="res-8" style="display:none;margin-top:12px;font-size:12px;padding:12px;border-radius:8px;font-family:monospace;white-space:pre-wrap;max-height:200px;overflow-y:auto;"></div>
+
+<?php endif; ?>
+        </div>
+    </div>
+</div>
+<?php endforeach; ?>
+
+</div>
+
+<script>
+window.impToggle = function(id) {
+    var el = document.getElementById('imp-body-' + id);
+    var ch = document.getElementById('chev-' + id);
+    if (!el) { alert('imp-body-' + id + ' not found'); return; }
+    var open = el.style.display === 'block';
+    el.style.display = open ? 'none' : 'block';
+    if (ch) ch.style.transform = open ? '' : 'rotate(180deg)';
+};
+
+window.doImport = async function(id, extra) {
+    var form = document.getElementById('frm-' + id);
+    var res  = document.getElementById('res-' + id);
+    if (!form || !res) return;
+    res.style.display = 'block';
+    res.style.background = '#f0f4f8';
+    res.style.color = '#333';
+    res.textContent = 'Running... please wait.';
+    var fd = new FormData(form);
+    if (extra) Object.keys(extra).forEach(function(k){ fd.append(k, extra[k]); });
+    try {
+        var r = await fetch('admin.php?tab=imports', { method:'POST', body:fd });
+        var d = await r.json();
+        if (d.success) {
+            res.style.background = '#f0fdf4'; res.style.color = '#166534';
+            var msg = 'Done!\n';
+            if (d.imported    != null) msg += 'Imported: ' + d.imported + '\n';
+            if (d.matched     != null) msg += 'Matched: '  + d.matched  + '\n';
+            if (d.skipped     != null) msg += 'Skipped: '  + d.skipped  + '\n';
+            if (d.flagged     != null) msg += 'Flagged: '  + d.flagged  + '\n';
+            if (d.high_risk   != null) msg += 'High risk: '+ d.high_risk+ '\n';
+            if (d.low_risk    != null) msg += 'Low risk: ' + d.low_risk + '\n';
+            if (d.lots_checked!= null) msg += 'Lots checked: ' + d.lots_checked + '\n';
+            if (d.log && d.log.length) msg += '\n' + d.log.join('\n');
+            res.textContent = msg;
+        } else {
+            res.style.background = '#fef2f2'; res.style.color = '#991b1b';
+            res.textContent = 'Error: ' + (d.error || 'Unknown');
+        }
+    } catch(e) {
+        res.style.background = '#fef2f2'; res.style.color = '#991b1b';
+        res.textContent = 'Request failed: ' + e.message;
+    }
+};
+</script>
+
 <?php endif; // end tab switch ?>
 </div><!-- /admin-body -->
 
@@ -3061,5 +3865,6 @@ function doBulkSave() {
     document.getElementById('bulkConfirmForm').submit();
 }
 </script>
+
 </body>
 </html>

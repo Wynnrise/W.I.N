@@ -898,27 +898,19 @@ $nb_radius = $nb_radius ?? 1500;
 
 // ── Places cache — read from DB, serve instantly ─────────────────────────────
 $places_cached = [];
-$places_debug = '';
 if ($nb_lat && $nb_lng) {
     try {
         $cq = $pdo->prepare("SELECT category, name, address, lat, lng, osm_url
                               FROM places_cache WHERE neighbourhood_id = ?
                               ORDER BY category, name");
         $cq->execute([$nb['id']]);
-        $all_rows = $cq->fetchAll(PDO::FETCH_ASSOC);
-        $places_debug = 'nb_id=' . $nb['id'] . ' rows=' . count($all_rows);
-        foreach ($all_rows as $row) {
+        foreach ($cq->fetchAll(PDO::FETCH_ASSOC) as $row) {
             $places_cached[$row['category']][] = $row;
         }
-    } catch(Exception $e) {
-        $places_debug = 'ERROR: ' . $e->getMessage();
-    }
-} else {
-    $places_debug = 'no lat/lng';
+    } catch(Exception $e) {}
 }
 $has_places = !empty($places_cached);
 ?>
-<?php /* DEBUG: <?= $places_debug ?> */ ?>
 <section style="padding:56px 0 0;background:#fff;">
     <div style="max-width:1400px;margin:0 auto;padding:0 28px;">
         <h2 class="nb-section-title mb-1">Nearby Amenities and Community Facilities</h2>
@@ -934,7 +926,7 @@ $has_places = !empty($places_cached);
                 <div class="nb-cat-btn" data-cat="transit" onclick="nbCatFilter(this,'transit')"><i class="fas fa-bus me-2"></i>Transit</div>
                 <div class="nb-cat-btn" data-cat="recreation" onclick="nbCatFilter(this,'recreation')"><i class="fas fa-dumbbell me-2"></i>Recreation</div>
                 <div class="nb-cat-btn" data-cat="school" onclick="nbCatFilter(this,'school')"><i class="fas fa-graduation-cap me-2"></i>Schools</div>
-                <div class="nb-cat-btn" data-cat="hospital" onclick="nbCatFilter(this,'hospital')"><i class="fas fa-hospital me-2"></i>Hospitals</div>
+                <div class="nb-cat-btn" data-cat="health" onclick="nbCatFilter(this,'health')"><i class="fas fa-plus-circle me-2"></i>Health</div>
                 <div class="nb-cat-btn" data-cat="restaurant" onclick="nbCatFilter(this,'restaurant')"><i class="fas fa-utensils me-2"></i>Dining</div>
             </div>
 
@@ -995,7 +987,7 @@ var NB_CATS = {
                   tags:[['leisure','fitness_centre'],['leisure','sports_centre'],['leisure','swimming_pool'],['leisure','ice_rink']] },
     school:     { color:'#7c3aed', icon:'fa-graduation-cap', label:'Schools',
                   tags:[['amenity','school'],['amenity','college'],['amenity','university'],['amenity','kindergarten']] },
-    hospital:   { color:'#0891b2', icon:'fa-hospital',       label:'Hospitals & Clinics',
+    health:     { color:'#0891b2', icon:'fa-plus-circle',     label:'Health & Clinics',
                   tags:[['amenity','hospital'],['amenity','clinic'],['amenity','doctors'],['amenity','pharmacy']] },
     restaurant: { color:'#dc2626', icon:'fa-utensils',       label:'Dining',
                   tags:[['amenity','restaurant'],['amenity','cafe'],['amenity','fast_food'],['amenity','bar'],['amenity','pub'],['amenity','food_court']] },
@@ -1033,10 +1025,25 @@ function nbHideTooltip() {
 // ── Create a circle marker ────────────────────────────────────────────────────
 function nbMakeMarker(lat, lng, cat) {
     var cfg = NB_CATS[cat];
-    return L.circleMarker([lat, lng], {
-        radius: 8, fillColor: cfg.color, fillOpacity: 1,
-        color: '#fff', weight: 2.5, bubblingMouseEvents: false
+    var html = '<div style="'
+        + 'width:32px;height:32px;'
+        + 'background:' + cfg.color + ';'
+        + 'border:2.5px solid #fff;'
+        + 'border-radius:50%;'
+        + 'display:flex;align-items:center;justify-content:center;'
+        + 'box-shadow:0 2px 6px rgba(0,0,0,0.35);'
+        + 'cursor:pointer;'
+        + '">'
+        + '<i class="fas ' + cfg.icon + '" style="color:#fff;font-size:13px;"></i>'
+        + '</div>';
+    var icon = L.divIcon({
+        html: html,
+        className: '',
+        iconSize: [32, 32],
+        iconAnchor: [16, 16],
+        popupAnchor: [0, -18]
     });
+    return L.marker([lat, lng], { icon: icon, bubblingMouseEvents: false });
 }
 
 // ── Build tooltip HTML for a place ───────────────────────────────────────────
@@ -1055,19 +1062,41 @@ function nbPlaceTooltip(name, addr, osmUrl, cat) {
 }
 
 // ── Add cached places to map and panels ──────────────────────────────────────
+// Point-in-polygon test using ray casting
+function nbPointInPolygon(lat, lng) {
+    if (!NB_BOUNDARY) return true; // no boundary = allow all
+    var coords = NB_BOUNDARY.type === 'Polygon'
+        ? NB_BOUNDARY.coordinates
+        : NB_BOUNDARY.coordinates[0];
+    var poly = coords[0]; // outer ring [lng, lat] pairs
+    var inside = false;
+    for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        var xi = poly[i][1], yi = poly[i][0]; // lat, lng
+        var xj = poly[j][1], yj = poly[j][0];
+        var intersect = ((yi > lng) !== (yj > lng)) &&
+            (lat < (xj - xi) * (lng - yi) / (yj - yi) + xi);
+        if (intersect) inside = !inside;
+    }
+    return inside;
+}
+
 function nbLoadFromCache() {
     Object.keys(NB_CATS).forEach(function(cat) {
         nbAllMarkers[cat] = [];
         var places = NB_CACHED[cat] || [];
         places.forEach(function(p) {
-            var marker = nbMakeMarker(parseFloat(p.lat), parseFloat(p.lng), cat);
+            var lat = parseFloat(p.lat);
+            var lng = parseFloat(p.lng);
+            // Filter to actual polygon boundary
+            if (!nbPointInPolygon(lat, lng)) return;
+            var marker = nbMakeMarker(lat, lng, cat);
             var iw = nbPlaceTooltip(p.name, p.address, p.osm_url, cat);
             marker.on('click', function() {
                 nbShowTooltip(marker, iw);
                 nbHighlightPanel(p.name);
             });
             marker.addTo(nbMap);
-            nbAllMarkers[cat].push({ marker: marker, name: p.name, addr: p.address, osmUrl: p.osm_url, lat: p.lat, lng: p.lng, iwContent: iw });
+            nbAllMarkers[cat].push({ marker: marker, name: p.name, addr: p.address, osmUrl: p.osm_url, lat: lat, lng: lng, iwContent: iw });
         });
     });
     nbRenderPanel('all');

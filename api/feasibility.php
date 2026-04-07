@@ -48,47 +48,100 @@ if (empty($slug)) $slug = 'metro-vancouver';
 // ── 2. Construction costs ─────────────────────────────────────
 $build_cost_psf = 420.00;
 try {
-    $stmt = $pdo->prepare("SELECT cost_low_psf FROM construction_costs WHERE neighbourhood_slug = ? AND city = ? AND is_active = 1 ORDER BY data_month DESC LIMIT 1");
-    $stmt->execute([$slug, $city]);
+    $stmt = $pdo->prepare("
+        SELECT cost_standard_low, cost_standard_high
+        FROM construction_costs
+        WHERE neighbourhood_slug = ?
+        LIMIT 1
+    ");
+    $stmt->execute([$slug]);
     $costs = $stmt->fetch(PDO::FETCH_ASSOC);
-    if ($costs) $build_cost_psf = (float)$costs['cost_low_psf'];
+    if ($costs && $costs['cost_standard_low']) {
+        // Use midpoint of standard low/high
+        $build_cost_psf = ((float)$costs['cost_standard_low'] + (float)$costs['cost_standard_high']) / 2;
+    }
 } catch (PDOException $e) {}
 
-// ── 3. Market stats ───────────────────────────────────────────
-$market     = null;
-$rebgv_area = $property['rebgv_area'] ?? null;
+// ── 3. Market stats — REBGV sold $/sqft ──────────────────────
+// Queries monthly_market_stats by COV neighbourhood_slug.
+// Multiple REBGV sub-areas already consolidated to COV slug at upload time.
+// AVG weighted by row count (more sales = more rows = more weight automatically).
+$market_sold = null;
 try {
-    if (!empty($rebgv_area)) {
-        $stmt = $pdo->prepare("SELECT * FROM monthly_market_stats WHERE rebgv_area = ? AND is_active = 1 ORDER BY data_month DESC LIMIT 1");
-        $stmt->execute([$rebgv_area]);
-        $market = $stmt->fetch(PDO::FETCH_ASSOC);
-    }
-    if (!$market) {
-        $stmt = $pdo->prepare("SELECT * FROM monthly_market_stats WHERE neighbourhood_slug = ? AND is_active = 1 ORDER BY data_month DESC LIMIT 1");
-        $stmt->execute([$slug]);
-        $market = $stmt->fetch(PDO::FETCH_ASSOC);
-    }
-} catch (PDOException $e) { $market = null; }
+    $stmt = $pdo->prepare("
+        SELECT
+            AVG(price_per_sqft)  AS avg_sold_psf_duplex,
+            COUNT(*)             AS sales_count,
+            MAX(data_month)      AS data_month,
+            MAX(days_on_market)  AS dom_duplex
+        FROM monthly_market_stats
+        WHERE neighbourhood_slug = ?
+          AND csv_type IN ('duplex','detached')
+          AND is_active = 1
+          AND price_per_sqft > 0
+        LIMIT 1
+    ");
+    $stmt->execute([$slug]);
+    $market_sold = $stmt->fetch(PDO::FETCH_ASSOC);
+} catch (PDOException $e) { $market_sold = null; }
 
-// ── 4. Previous month DOM ─────────────────────────────────────
-$prev_market = null;
+// ── 3b. Rental data — all 3 sources ──────────────────────────
+$rent_livrent = null;
+$rent_rebgv   = null;
 try {
-    if (!empty($rebgv_area)) {
-        $stmt = $pdo->prepare("SELECT days_on_market_duplex FROM monthly_market_stats WHERE rebgv_area = ? AND is_active = 0 ORDER BY data_month DESC LIMIT 1");
-        $stmt->execute([$rebgv_area]);
-        $prev_market = $stmt->fetch(PDO::FETCH_ASSOC);
-    }
-    if (!$prev_market) {
-        $stmt = $pdo->prepare("SELECT days_on_market_duplex FROM monthly_market_stats WHERE neighbourhood_slug = ? AND is_active = 0 ORDER BY data_month DESC LIMIT 1");
-        $stmt->execute([$slug]);
-        $prev_market = $stmt->fetch(PDO::FETCH_ASSOC);
-    }
-} catch (PDOException $e) { $prev_market = null; }
+    // liv.rent
+    $stmt = $pdo->prepare("
+        SELECT avg_rent_1br, avg_rent_2br, avg_rent_3br
+        FROM monthly_market_stats
+        WHERE neighbourhood_slug = ?
+          AND csv_type = 'rental_livrent'
+          AND is_active = 1
+        ORDER BY data_month DESC LIMIT 1
+    ");
+    $stmt->execute([$slug]);
+    $rent_livrent = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+
+    // REBGV rental (also check old 'rental' type for backward compat)
+    $stmt = $pdo->prepare("
+        SELECT avg_rent_1br, avg_rent_2br, avg_rent_3br
+        FROM monthly_market_stats
+        WHERE neighbourhood_slug = ?
+          AND csv_type IN ('rental_rebgv','rental')
+          AND is_active = 1
+        ORDER BY data_month DESC LIMIT 1
+    ");
+    $stmt->execute([$slug]);
+    $rent_rebgv = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+} catch (PDOException $e) {}
+
+// ── 4. Previous month DOM from neighbourhood_hpi_history ─────
+$dom_current  = 0;
+$dom_previous = 0;
+try {
+    $stmt = $pdo->prepare("
+        SELECT h.dom_duplex, h.month_year
+        FROM neighbourhood_hpi_history h
+        JOIN neighbourhoods n ON n.id = h.neighbourhood_id
+        WHERE n.slug = ?
+          AND h.dom_duplex IS NOT NULL
+        ORDER BY h.month_year DESC
+        LIMIT 2
+    ");
+    $stmt->execute([$slug]);
+    $dom_rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    if (count($dom_rows) >= 1) $dom_current  = (int)$dom_rows[0]['dom_duplex'];
+    if (count($dom_rows) >= 2) $dom_previous = (int)$dom_rows[1]['dom_duplex'];
+} catch (PDOException $e) {}
 
 // ── 5. CMHC benchmarks ────────────────────────────────────────
 $cmhc = null;
 try {
-    $stmt = $pdo->prepare("SELECT cmhc_rent_1br, cmhc_rent_2br, cmhc_rent_3br FROM cmhc_benchmarks WHERE neighbourhood_slug = ? ORDER BY year DESC LIMIT 1");
+    $stmt = $pdo->prepare("
+        SELECT benchmark_1br, benchmark_2br, benchmark_3br
+        FROM cmhc_benchmarks
+        WHERE neighbourhood_slug = ?
+        ORDER BY year DESC LIMIT 1
+    ");
     $stmt->execute([$slug]);
     $cmhc = $stmt->fetch(PDO::FETCH_ASSOC);
 } catch (PDOException $e) { $cmhc = null; }
@@ -96,9 +149,20 @@ try {
 // ── 6. Bank forecasts ─────────────────────────────────────────
 $bank_forecasts = [];
 try {
-    $stmt = $pdo->prepare("SELECT metro_forecast_pct FROM wynston_outlook_inputs WHERE quarter = (SELECT quarter FROM wynston_outlook_inputs ORDER BY forecast_date DESC LIMIT 1)");
+    $stmt = $pdo->prepare("
+        SELECT forecast_psf_yoy
+        FROM wynston_outlook_inputs
+        WHERE quarter = (
+            SELECT quarter FROM wynston_outlook_inputs
+            WHERE is_active = 1
+            ORDER BY created_at DESC LIMIT 1
+        )
+        AND is_active = 1
+    ");
     $stmt->execute();
-    $bank_forecasts = array_map('floatval', array_column($stmt->fetchAll(PDO::FETCH_ASSOC), 'metro_forecast_pct'));
+    $bank_forecasts = array_map('floatval',
+        array_column($stmt->fetchAll(PDO::FETCH_ASSOC), 'forecast_psf_yoy')
+    );
 } catch (PDOException $e) { $bank_forecasts = []; }
 
 // ── 7. Pipeline count ─────────────────────────────────────────
@@ -125,9 +189,7 @@ try {
 } catch (PDOException $e) { $design = null; }
 
 // ── DOM trend ─────────────────────────────────────────────────
-$dom_current  = (int)($market['days_on_market_duplex']      ?? 0);
-$dom_previous = (int)($prev_market['days_on_market_duplex'] ?? 0);
-$dom_diff     = $dom_current - $dom_previous;
+$dom_diff = $dom_current - $dom_previous;
 if      ($dom_diff < -1) { $dom_arrow = '↓'; $dom_colour = 'green'; $dom_label = 'Faster than last month'; }
 elseif  ($dom_diff >  1) { $dom_arrow = '↑'; $dom_colour = 'amber'; $dom_label = 'Slower than last month'; }
 else                      { $dom_arrow = '—'; $dom_colour = 'gray';  $dom_label = 'Stable'; }
@@ -156,9 +218,9 @@ $warning_149 = ($lot_width >= 14.5 && $lot_width < 15.1);
 
 // ── Calculations ──────────────────────────────────────────────
 $calculator   = new WynstonCalculator();
-$avg_sold_psf = (float)($market['avg_sold_psf_duplex'] ?? 985.00);
-$sales_count  = (int)($market['sales_count_duplex']    ?? 0);
-$land_value   = (float)($property['assessed_land_value'] ?? 1500000);
+$avg_sold_psf = (float)($market_sold['avg_sold_psf_duplex'] ?? 985.00);
+$sales_count  = (int)($market_sold['sales_count']           ?? 0);
+$land_value   = (float)($property['assessed_land_value']    ?? 1500000);
 
 $unit_mix = match(true) {
     $max_units >= 6 => ['1br' => 2, '2br' => 3, '3br' => 1],
@@ -166,6 +228,39 @@ $unit_mix = match(true) {
     $max_units >= 3 => ['1br' => 1, '2br' => 2, '3br' => 0],
     default         => ['1br' => 0, '2br' => 2, '3br' => 0],
 };
+
+// ── 3-comparable rental mid-point ────────────────────────────
+// Weighted average: liv.rent 45% + REBGV 35% + CMHC 20%
+// Missing sources have their weight redistributed automatically
+$rent_midpoint = $calculator->calculateRentalMidPoint(
+    livrent: [
+        '1br' => (float)($rent_livrent['avg_rent_1br'] ?? 0),
+        '2br' => (float)($rent_livrent['avg_rent_2br'] ?? 0),
+        '3br' => (float)($rent_livrent['avg_rent_3br'] ?? 0),
+    ],
+    rebgv: [
+        '1br' => (float)($rent_rebgv['avg_rent_1br'] ?? 0),
+        '2br' => (float)($rent_rebgv['avg_rent_2br'] ?? 0),
+        '3br' => (float)($rent_rebgv['avg_rent_3br'] ?? 0),
+    ],
+    cmhc: [
+        '1br' => (float)($cmhc['benchmark_1br'] ?? 0),
+        '2br' => (float)($cmhc['benchmark_2br'] ?? 0),
+        '3br' => (float)($cmhc['benchmark_3br'] ?? 0),
+    ]
+);
+
+// Fallback defaults if no rental data at all
+$market_rents_final = [
+    '1br' => $rent_midpoint['1br'] ?: 2100.0,
+    '2br' => $rent_midpoint['2br'] ?: 2750.0,
+    '3br' => $rent_midpoint['3br'] ?: 3200.0,
+];
+$cmhc_rents_final = [
+    '1br' => (float)($cmhc['benchmark_1br'] ?? 1875),
+    '2br' => (float)($cmhc['benchmark_2br'] ?? 2400),
+    '3br' => (float)($cmhc['benchmark_3br'] ?? 2900),
+];
 
 $strata = $calculator->calculateStrataProForma(
     lot_area_sqm: $lot_area, assessed_land_value: $land_value,
@@ -177,8 +272,8 @@ $rental = $calculator->calculateRentalProForma(
     lot_area_sqm: $lot_area, assessed_land_value: $land_value,
     build_cost_psf: $build_cost_psf, density_bonus_psf_rate: 40.00,
     is_peat_zone: $is_peat, unit_mix: $unit_mix,
-    market_rents:    ['1br' => (float)($market['avg_rent_1br'] ?? 2100), '2br' => (float)($market['avg_rent_2br'] ?? 2750), '3br' => (float)($market['avg_rent_3br'] ?? 3200)],
-    cmhc_benchmarks: ['1br' => (float)($cmhc['cmhc_rent_1br'] ?? 1875), '2br' => (float)($cmhc['cmhc_rent_2br'] ?? 2400), '3br' => (float)($cmhc['cmhc_rent_3br'] ?? 2900)],
+    market_rents:    $market_rents_final,
+    cmhc_benchmarks: $cmhc_rents_final,
     vacancy_rate: 0.05, city: $city
 );
 
@@ -243,7 +338,6 @@ echo json_encode([
         'address'           => $property['address'],
         'city'              => $property['city'],
         'neighbourhood'     => $slug,
-        'rebgv_area'        => $market['rebgv_area'] ?? null,
         'lot_width_m'       => $lot_width,
         'lot_width_ft'      => round($lot_width / 0.3048, 1),
         'lot_area_sqm'      => $lot_area,
@@ -255,6 +349,7 @@ echo json_encode([
         'assessed_value'    => $property['assessed_land_value'],
         'heritage_category' => $property['heritage_category'],
         'peat_zone'         => $is_peat,
+        'floodplain_risk'   => $property['floodplain_risk'] ?? 'none',
         'covenant_present'  => (bool)($property['covenant_present'] ?? false),
         'covenant_types'    => $property['covenant_types'] ?? null,
         'easement_present'  => (bool)($property['easement_present'] ?? false),
@@ -276,7 +371,11 @@ echo json_encode([
         'label'           => $dom_label,
     ],
     'strata'  => $strata,
-    'rental'  => $rental,
+    'rental'  => array_merge($rental, [
+        // Attach rent source detail so side panel can show per-source values
+        'rent_sources' => $rent_midpoint['detail'] ?? [],
+        'sources_used' => $rent_midpoint['sources_used'] ?? [],
+    ]),
     'outlook' => $outlook,
     'design'  => $design ? [
         'design_id'    => $design['design_id'],
@@ -293,5 +392,10 @@ echo json_encode([
         'preferred_style'  => $property['preferred_model_style'] ?? 'modern',
     ],
     'path_requested' => $path,
-    'data_source'    => !empty($rebgv_area) ? 'rebgv_area' : 'neighbourhood_slug',
+    'market_data' => [
+        'avg_sold_psf'  => $avg_sold_psf,
+        'sales_count'   => $sales_count,
+        'data_month'    => $market_sold['data_month'] ?? null,
+        'using_fallback'=> ($sales_count === 0),
+    ],
 ], JSON_PRETTY_PRINT);

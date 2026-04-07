@@ -22,6 +22,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $password     = $_POST['password']          ?? '';
     $password2    = $_POST['password2']         ?? '';
     $first_name   = explode(' ', $full_name)[0];
+    $allowed_types = ['builder','investor','realtor','broker'];
+    $user_type    = in_array($_POST['user_type'] ?? '', $allowed_types) ? $_POST['user_type'] : 'builder';
 
     // Validate
     if (!$full_name)    $errors[] = 'Full name is required.';
@@ -30,6 +32,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (strlen($password) < 8) $errors[] = 'Password must be at least 8 characters.';
     if ($password !== $password2)  $errors[] = 'Passwords do not match.';
     if (!isset($_POST['gdpr']))    $errors[] = 'Please accept the terms to continue.';
+    if (!in_array($user_type, $allowed_types)) $errors[] = 'Please select your account type.';
 
     if (empty($errors)) {
         // Check duplicate email
@@ -49,9 +52,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $verify_token = bin2hex(random_bytes(32));
 
             $pdo->prepare("INSERT INTO developers
-                (full_name, company_name, email, phone, website, projects, password_hash, status, email_verified, verify_token)
-                VALUES (?,?,?,?,?,?,?,'pending',0,?)")
-                ->execute([$full_name, $company_name, $email, $phone, $website, $projects, $hash, $verify_token]);
+                (full_name, company_name, email, phone, website, projects, password_hash, status, email_verified, verify_token, user_type)
+                VALUES (?,?,?,?,?,?,?,'pending',0,?,?)")
+                ->execute([$full_name, $company_name, $email, $phone, $website, $projects, $hash, $verify_token, $user_type]);
 
             $site_url   = 'https://' . $_SERVER['HTTP_HOST'];
             $admin_url  = $site_url . '/admin.php?tab=developers';
@@ -59,12 +62,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $from       = "From: noreply@wynnstonconcierge.com\r\nX-Mailer: PHP/" . phpversion();
 
             // ── Email 1: Notify sold@tamwynn.ca ──────────────────
+            $ut_label = ucfirst($user_type);
             $body1  = "New developer signup on Wynnston Concierge — pending your approval.\n\n";
-            $body1 .= "Name:     {$full_name}\n";
-            $body1 .= "Company:  {$company_name}\n";
-            $body1 .= "Email:    {$email}\n";
-            $body1 .= "Phone:    " . ($phone ?: '—') . "\n";
-            $body1 .= "Website:  " . ($website ?: '—') . "\n\n";
+            $body1 .= "Name:      {$full_name}\n";
+            $body1 .= "Company:   {$company_name}\n";
+            $body1 .= "Email:     {$email}\n";
+            $body1 .= "Phone:     " . ($phone ?: '—') . "\n";
+            $body1 .= "Website:   " . ($website ?: '—') . "\n";
+            $body1 .= "User Type: {$ut_label}\n\n";
             $body1 .= "Projects:\n" . ($projects ?: '—') . "\n\n";
             $body1 .= "──────────────────────────────────\n";
             $body1 .= "Approve or reject:\n{$admin_url}\n\n";
@@ -117,7 +122,7 @@ ob_start();
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" type="image/png" href="/assets/img/favicon.png">
     <link rel="shortcut icon" href="/assets/img/favicon.png">
-    <title>Create Developer Account — Wynnston Concierge</title>
+    <title>Apply for Access — Wynston W.I.N</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <style>
@@ -355,6 +360,20 @@ ob_start();
             border-bottom: 1px solid var(--bdr);
         }
 
+        /* User type cards */
+        .ut-card {
+            border: 1.5px solid var(--bdr);
+            border-radius: 10px;
+            padding: 14px;
+            text-align: center;
+            transition: border-color .15s, background .15s;
+            background: #fff;
+            height: 100%;
+        }
+        .ut-card:hover { border-color: #aaa; background: #fafafa; }
+        .ut-card.ut-selected { border-color: var(--navy); background: rgba(0,36,70,0.03); box-shadow: 0 0 0 3px rgba(0,36,70,0.08); }
+        .ut-card.ut-selected i { color: var(--navy) !important; }
+
         /* Password strength */
         .pw-strength { height: 4px; border-radius: 2px; background: #eee; margin-top: -14px; margin-bottom: 18px; overflow: hidden; }
         .pw-strength-bar { height: 100%; width: 0; transition: width .3s, background .3s; border-radius: 2px; }
@@ -380,37 +399,51 @@ ob_start();
         <img src="/assets/img/logo-light.png" alt="Wynnston Concierge" onerror="this.style.display='none';this.nextSibling.style.display='block'">
         <span style="display:none;color:#fff;font-weight:800;font-size:18px;letter-spacing:1px;">WYNNSTON</span>
     </a>
-    <span class="ac-topbar-link">Already have an account? <a href="log-in.php">Sign in →</a></span>
+    <span class="ac-topbar-link">Already approved? <a href="log-in.php">Sign in →</a></span>
 </div>
 
 <div class="ac-wrap">
 
     <!-- LEFT panel -->
     <div class="ac-left">
-        <div class="ac-left-badge"><i class="fas fa-gem"></i> Developer Portal</div>
-        <h1>List Your <span>Pre-Sale</span> Development</h1>
-        <p>Join Vancouver's premier concierge real estate platform. Showcase your development to qualified buyers with our full-service marketing suite.</p>
+        <div class="ac-left-badge"><i class="fas fa-map-marked-alt"></i> W.I.N Portal</div>
+        <h1>Vancouver's <span>Multiplex</span> Intelligence Platform</h1>
+        <p>Join builders, investors, realtors, and mortgage brokers using Wynston W.I.N to analyse R1-1 lots, run feasibility pro formas, and move on opportunities faster.</p>
         <ul class="ac-perks">
-            <li><i class="fas fa-check"></i> Dedicated concierge listing page with professional photography</li>
-            <li><i class="fas fa-check"></i> Matterport virtual tour integration</li>
-            <li><i class="fas fa-check"></i> Organized file storage — photos, floorplans, videos</li>
-            <li><i class="fas fa-check"></i> Direct buyer inquiry management</li>
-            <li><i class="fas fa-check"></i> Walk Score, school catchment, neighbourhood data</li>
-            <li><i class="fas fa-check"></i> Featured placement on Wynnston Concierge</li>
+            <li><i class="fas fa-check"></i> Interactive map of 68,000+ R1-1 zoned lots in Vancouver</li>
+            <li><i class="fas fa-check"></i> Full feasibility pro forma — strata, rental, and Outlook tabs</li>
+            <li><i class="fas fa-check"></i> Save lots, generate branded PDF reports, share with clients</li>
+            <li><i class="fas fa-check"></i> Acquisition pipeline — submit inquiries directly to Wynston</li>
+            <li><i class="fas fa-check"></i> Wynston Outlook — 12-month $/sqft forecast by neighbourhood</li>
+            <li><i class="fas fa-check"></i> Role-specific dashboard: Builder, Investor, Realtor, Broker</li>
         </ul>
     </div>
 
     <!-- RIGHT panel -->
     <div class="ac-right">
-        <h2>Create Developer Account</h2>
-        <p class="ac-sub">Set up your profile to submit and manage listings.</p>
+        <h2>Apply for W.I.N Access</h2>
+        <p class="ac-sub">All applications are reviewed by the Wynston team. Approval typically within 1 business day.</p>
+
+        <div style="background:#f9f6f0;border:1px solid #e8e4dd;border-radius:10px;padding:16px 18px;margin-bottom:28px;display:flex;gap:14px;align-items:flex-start;">
+            <div style="width:36px;height:36px;background:#002446;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;">
+                <i class="fas fa-shield-halved" style="color:#c9a84c;font-size:15px;"></i>
+            </div>
+            <div>
+                <div style="font-size:13px;font-weight:700;color:#002446;margin-bottom:6px;">How access works</div>
+                <div style="display:flex;flex-direction:column;gap:5px;">
+                    <div style="font-size:12px;color:#555;display:flex;align-items:center;gap:8px;"><span style="width:18px;height:18px;background:#002446;color:#c9a84c;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;flex-shrink:0;">1</span>Complete your professional profile below</div>
+                    <div style="font-size:12px;color:#555;display:flex;align-items:center;gap:8px;"><span style="width:18px;height:18px;background:#002446;color:#c9a84c;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;flex-shrink:0;">2</span>Wynston reviews your application — within 1 business day</div>
+                    <div style="font-size:12px;color:#555;display:flex;align-items:center;gap:8px;"><span style="width:18px;height:18px;background:#002446;color:#c9a84c;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;flex-shrink:0;">3</span>You receive approval confirmation and full W.I.N access</div>
+                </div>
+            </div>
+        </div>
 
         <?php if ($success): ?>
         <div class="ac-alert-success">
             <i class="fas fa-check-circle"></i>
-            <h3>Account Created!</h3>
-            <p>Your developer account is under review. You'll receive an email once approved — usually within 1 business day.</p>
-            <a href="log-in.php" style="display:inline-block;margin-top:16px;padding:10px 28px;background:#002446;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;">Go to Login →</a>
+            <h3>Application Submitted</h3>
+            <p>Thank you. Your W.I.N access application is under review by the Wynston team. You will receive a confirmation email once approved — typically within 1 business day.</p>
+            <p style="margin-top:10px;font-size:12px;color:#888;">Questions? Contact <a href="mailto:info@wynston.ca" style="color:#002446;">info@wynston.ca</a></p>
         </div>
 
         <?php else: ?>
@@ -421,13 +454,30 @@ ob_start();
         </div>
         <?php endif; ?>
 
-        <!-- Social sign-in — available after domain goes live -->
-        <div style="background:#f9f9f9;border:1px solid #eee;border-radius:10px;padding:12px 16px;margin-bottom:24px;font-size:13px;color:#888;display:flex;align-items:center;gap:10px;">
-            <i class="fas fa-lock" style="color:#bbb;"></i>
-            Google &amp; Apple sign-in will be available once the site moves to its permanent domain.
-        </div>
-
         <form method="POST" action="">
+
+            <div class="ac-section-title">I am a...</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:22px;">
+                <?php
+                $types = [
+                    'builder'  => ['fa-hard-hat',          'Builder / Developer',  'Build multiplexes and pre-sale developments'],
+                    'investor' => ['fa-chart-line',         'Investor',             'Evaluate ROI, cap rate, and rental returns'],
+                    'realtor'  => ['fa-id-badge',           'Realtor',              'Find lots and generate reports for clients'],
+                    'broker'   => ['fa-file-invoice-dollar','Mortgage Broker',      'Review NOI and debt coverage for underwriting'],
+                ];
+                foreach ($types as $val => [$icon, $label, $desc]):
+                    $sel = ($_POST['user_type'] ?? 'builder') === $val;
+                ?>
+                <label style="display:block;cursor:pointer;">
+                    <input type="radio" name="user_type" value="<?= $val ?>" <?= $sel ? 'checked' : '' ?> required style="display:none;" class="ut-radio">
+                    <div class="ut-card <?= $sel ? 'ut-selected' : '' ?>" data-val="<?= $val ?>">
+                        <i class="fas <?= $icon ?>" style="font-size:18px;color:var(--gold);display:block;margin-bottom:6px;"></i>
+                        <strong style="font-size:13px;display:block;margin-bottom:3px;"><?= $label ?></strong>
+                        <span style="font-size:11px;color:#888;line-height:1.4;"><?= $desc ?></span>
+                    </div>
+                </label>
+                <?php endforeach; ?>
+            </div>
 
             <div class="ac-section-title">Your Information</div>
             <div class="ac-row">
@@ -473,7 +523,7 @@ ob_start();
             </label>
 
             <button type="submit" class="ac-btn-primary">
-                Create Developer Account <i class="fas fa-arrow-right ms-2"></i>
+                Submit Application <i class="fas fa-arrow-right ms-2"></i>
             </button>
 
         </form>
@@ -484,6 +534,13 @@ ob_start();
 </div>
 
 <script>
+document.querySelectorAll('.ut-radio').forEach(function(radio) {
+    radio.closest('label').addEventListener('click', function() {
+        document.querySelectorAll('.ut-card').forEach(c => c.classList.remove('ut-selected'));
+        this.querySelector('.ut-card').classList.add('ut-selected');
+    });
+});
+
 function checkStrength(val) {
     var bar = document.getElementById('pw-bar');
     var score = 0;

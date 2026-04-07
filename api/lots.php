@@ -15,7 +15,8 @@ try {
                lot_width_m, lot_area_sqm,
                lane_access, transit_proximate,
                nearest_ftn_stop_m, profitability_score,
-               heritage_category, peat_zone, has_active_permit
+               heritage_category, peat_zone, has_active_permit,
+               floodplain_risk
         FROM   plex_properties
         WHERE  lat IS NOT NULL
           AND  lng IS NOT NULL
@@ -45,6 +46,7 @@ try {
                 'heritage_category' => $lot['heritage_category'],
                 'peat_zone'         => (int)$lot['peat_zone'],
                 'has_active_permit'  => (int)($lot['has_active_permit'] ?? 0),
+                'floodplain_risk'   => $lot['floodplain_risk'] ?? 'none',
             ],
         ];
     }
