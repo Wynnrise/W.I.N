@@ -197,9 +197,10 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--cream);
 
 /* ── Lot cards ─────────────────────────── */
 .lot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
-.lot-card { background: #fff; border-radius: 10px; padding: 18px; border: 1px solid var(--bdr); border-left: 4px solid var(--tier-c, #94a3b8); transition: box-shadow 0.15s; }
+.lot-card { background: #fff; border-radius: 10px; padding: 18px; border: 1px solid var(--bdr); border-left: 4px solid var(--tier-c, #94a3b8); transition: box-shadow 0.15s; position: relative; }
 .lot-card:hover { box-shadow: 0 4px 16px rgba(0,36,70,0.1); }
-.lot-addr { font-weight: 700; color: var(--navy); font-size: 14px; margin-bottom: 10px; line-height: 1.35; }
+.lot-heart { position: absolute; top: 14px; right: 14px; color: #ef4444; font-size: 15px; }
+.lot-addr { font-weight: 700; color: var(--navy); font-size: 14px; margin-bottom: 10px; line-height: 1.35; padding-right: 24px; }
 .lot-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .pill { font-size: 11px; padding: 3px 10px; border-radius: 12px; font-weight: 600; }
 .lot-flags { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
@@ -276,8 +277,8 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--cream);
 .role-infobox i { color: var(--gold); font-size: 15px; }
 
 /* ── Toast ─────────────────────────────── */
-#toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px); background: var(--navy); color: var(--gold); padding: 12px 24px; border-radius: 8px; font-size: 14px; font-weight: 600; z-index: 9999; transition: transform 0.3s; pointer-events: none; white-space: nowrap; }
-#toast.show { transform: translateX(-50%) translateY(0); }
+#toast { position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(80px); background: rgba(0,20,46,.97); backdrop-filter: blur(12px); border: 1px solid rgba(201,168,76,.4); color: #fff; padding: 10px 22px; border-radius: 24px; font-size: 13px; font-weight: 600; z-index: 9999; transition: transform 0.25s, opacity 0.25s; pointer-events: none; white-space: nowrap; opacity: 0; box-shadow: 0 4px 20px rgba(0,0,0,.4); }
+#toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
 </style>
 </head>
 <body>
@@ -452,6 +453,7 @@ if ($active_tab === 'overview'): ?>
         $wft = $lot['lot_width_m'] > 0 ? round($lot['lot_width_m'] / 0.3048, 1) . 'ft' : '—';
     ?>
     <div class="lot-card" style="--tier-c:<?= $tc ?>">
+        <i class="fas fa-heart lot-heart" title="Saved lot"></i>
         <div class="lot-addr"><?= htmlspecialchars($lot['address']) ?></div>
         <div class="lot-pills">
             <span class="pill" style="background:<?= $tc ?>;color:#fff;"><?= $tl ?></span>
@@ -542,6 +544,7 @@ elseif ($active_tab === 'planner'): ?>
     if (!$lot['lane_access']) $flags[] = ['No Lane', false];
 ?>
 <div class="lot-card" style="--tier-c:<?= $tc ?>">
+    <i class="fas fa-heart lot-heart" title="Saved lot"></i>
     <div class="lot-addr"><?= htmlspecialchars($lot['address']) ?></div>
     <div class="lot-pills">
         <span class="pill" style="background:<?= $tc ?>;color:#fff;"><?= $tl ?></span>

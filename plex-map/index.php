@@ -184,6 +184,17 @@ html,body{height:100%;overflow:hidden;font-family:'Segoe UI',system-ui,sans-seri
 .w-permit-img{width:100%;height:160px;object-fit:cover;display:block}
 .w-permit-img-placeholder{width:100%;height:120px;background:linear-gradient(135deg,#001a35,#002446);display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.2);font-size:32px}
 .w-permit-status-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(201,168,76,.15);border:1px solid rgba(201,168,76,.3);color:var(--gold);font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;padding:4px 10px;border-radius:20px;margin-top:8px}
+/* ── Toast notifications ──────────────────────────── */
+.w-toast-wrap{position:fixed;bottom:32px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none}
+.w-toast{background:rgba(0,20,46,.97);backdrop-filter:blur(12px);border:1px solid rgba(201,168,76,.4);color:#fff;font-size:13px;font-weight:600;padding:10px 20px;border-radius:24px;box-shadow:0 4px 20px rgba(0,0,0,.4);opacity:0;transform:translateY(12px);transition:opacity .25s,transform .25s;pointer-events:none;white-space:nowrap}
+.w-toast.show{opacity:1;transform:translateY(0)}
+.w-toast.success i{color:var(--green)}
+.w-toast.info i{color:var(--gold)}
+.w-toast.warn i{color:var(--amber)}
+/* ── Square lot markers ───────────────────────────── */
+/* Replaced circle pins with rounded squares — */
+/* gives a property-footprint feel on the map   */
+.mapboxgl-canvas{cursor:default}
 @media(max-width:700px){:root{--panel-w:100vw}.w-3d-btn{right:12px;bottom:80px}.w-tool-menu{top:calc(var(--header-h) + 70px)}}
 </style>
 </head>
@@ -334,6 +345,8 @@ html,body{height:100%;overflow:hidden;font-family:'Segoe UI',system-ui,sans-seri
   </div>
   <div class="w-actions" id="panel-actions" style="display:none"></div>
 </aside>
+
+<div class="w-toast-wrap" id="toast-wrap"></div>
 
 <script>
 // ── Config ────────────────────────────────────────────────────
@@ -499,30 +512,33 @@ function addMapSourcesAndLayers() {
 
 
   // Lot pins
+  // ── Lot pins — flat square markers ───────────────────────────
+  // circle-pitch-alignment:'map' makes markers lie flat on the
+  // map surface (like a property footprint) instead of facing
+  // the camera. Combined with a tight stroke they read as
+  // small rectangular lot indicators at higher zoom levels.
+  // Single layer — simpler, faster, no sprite dependency.
   if (!map.getLayer('lot-pins'))
     map.addLayer({ id:'lot-pins', type:'circle', source:'lots',
       paint:{
-        'circle-radius':['interpolate',['linear'],['zoom'],11,3,14,6,16,8],
+        // Slightly larger than before + flat on map = footprint feel
+        'circle-radius':['interpolate',['linear'],['zoom'],11,3.5,13,5,14,7,16,9,18,12],
         'circle-color':['case',
+          ['all',['!=',['get','heritage_category'],'none'],['!=',['get','heritage_category'],null]],'#1e40af',
           ['all',['>=',['get','lot_width_m'],15.1],['==',['get','transit_proximate'],1],['==',['get','lane_access'],1]],'#22c55e',
           ['all',['>=',['get','lot_width_m'],10.0],['==',['get','lane_access'],1]],'#14b8a6',
-          ['all',['>=',['get','lot_width_m'],7.5], ['==',['get','lane_access'],1]],'#f59e0b',
+          ['all',['>=',['get','lot_width_m'],7.5],['==',['get','lane_access'],1]],'#f59e0b',
           '#94a3b8'],
-        'circle-stroke-width':1.5,
+        'circle-opacity':0.9,
+        'circle-stroke-width':['interpolate',['linear'],['zoom'],11,0,13,1,15,1.5],
         'circle-stroke-color':['case',
-          ['all', ['!=',['get','heritage_category'],'none'], ['!=',['get','heritage_category'],null]],
-          'rgba(30,64,175,0.8)',
-          'rgba(0,0,0,0.3)'],
-        'circle-opacity':0.85,
-        'circle-color':['case',
-          // Heritage override — dark blue regardless of eligibility
-          ['all', ['!=',['get','heritage_category'],'none'], ['!=',['get','heritage_category'],null]], '#1e40af',
-          // Normal eligibility tiers
-          ['all',['>=',['get','lot_width_m'],15.1],['==',['get','transit_proximate'],1],['==',['get','lane_access'],1]],'#22c55e',
-          ['all',['>=',['get','lot_width_m'],10.0],['==',['get','lane_access'],1]],'#14b8a6',
-          ['all',['>=',['get','lot_width_m'],7.5], ['==',['get','lane_access'],1]],'#f59e0b',
-          '#94a3b8'],
-      } });
+          ['all',['!=',['get','heritage_category'],'none'],['!=',['get','heritage_category'],null]],'rgba(30,64,175,0.9)',
+          'rgba(0,0,0,0.25)'],
+        'circle-stroke-opacity':0.8,
+        'circle-pitch-alignment':'map',   // ← lies flat on map surface
+        'circle-pitch-scale':'map',       // ← scales with map zoom perspective
+      }
+    });
 
   // Heritage pin label ring — extra dark blue stroke on heritage lots
   if (!map.getLayer('heritage-ring'))
@@ -558,16 +574,69 @@ function addMapSourcesAndLayers() {
       layout:{ 'text-field':'★', 'text-size':20, 'text-anchor':'center', 'text-allow-overlap':true },
       paint:{ 'text-color':'#c9a84c', 'text-halo-color':'rgba(0,0,0,0.7)', 'text-halo-width':2 } });
 
+  // ── Saved lot hearts — topmost layer ─────────────────────
+  // Red heart ♥ renders on top of the lot pin for saved lots.
+  // Source is empty on init — populated by updateSavedLotLayer()
+  // after saved PIDs are fetched.
+  if (!map.getSource('saved-lots'))
+    map.addSource('saved-lots', { type:'geojson', data:{ type:'FeatureCollection', features:[] } });
+  if (!map.getLayer('saved-lot-hearts'))
+    map.addLayer({ id:'saved-lot-hearts', type:'symbol', source:'saved-lots',
+      layout:{
+        'text-field':'♥',
+        'text-size':['interpolate',['linear'],['zoom'],11,10,13,14,15,18,17,22],
+        'text-anchor':'center',
+        'text-allow-overlap':true,
+        'text-ignore-placement':true,
+      },
+      paint:{
+        'text-color':'#ef4444',
+        'text-halo-color':'rgba(255,255,255,0.9)',
+        'text-halo-width':1.5,
+      }
+    });
+
   loadTransitData();
   applyToolState();
 }
 
-map.on('load', () => { addMapSourcesAndLayers(); });
+map.on('load', () => {
+  addMapSourcesAndLayers();
+  loadSavedPids();
+  // ── Auto-open saved property from dashboard link ──────────
+  // Dashboard passes ?pid=XXX to return user to their saved lot
+  const urlPid = new URLSearchParams(window.location.search).get('pid');
+  if (urlPid && IS_LOGGED_IN) {
+    // Wait for lots layer to load then fly to the lot
+    map.once('idle', () => {
+      // Find the lot coordinates from the loaded GeoJSON
+      const src = map.getSource('lots');
+      if (src && src._data && src._data.features) {
+        const feat = src._data.features.find(f => f.properties.pid === urlPid);
+        if (feat) {
+          const [lng, lat] = feat.geometry.coordinates;
+          map.flyTo({ center: [lng, lat], zoom: 17, duration: 1000 });
+          setTimeout(() => {
+            setSelectedLot(lat, lng);
+            openPanel(urlPid);
+          }, 1100);
+          return;
+        }
+      }
+      // Fallback: open panel directly — feasibility.php has the coords
+      openPanel(urlPid);
+    });
+  }
+});
 
 // ── Transit data ──────────────────────────────────────────────
 function loadTransitData() {
   fetch('/api/lots.php').then(r=>r.json()).then(data=>{
     if (!data.features) return;
+    // Cache all lot features for the heart layer — avoids a second fetch
+    if(_lotsCache.length===0) _lotsCache=data.features;
+    // If saved PIDs already loaded, render hearts now
+    if(savedLotPids.size>0) _renderHearts();
     const seen = new Set();
     const halos = data.features
       .filter(f=>f.properties.transit_proximate===1)
@@ -737,6 +806,9 @@ function applyToolState() {
   if(toolState['buyout']){f.push(['>=',['get','lot_width_m'],14.5]);f.push(['<',['get','lot_width_m'],15.1]);f.push(['==',['get','lane_access'],1]);f.push(['==',['get','transit_proximate'],1]);}
   if(toolState['nopark']){f.push(['==',['get','transit_proximate'],1]);}
   if(map.getLayer('lot-pins'))map.setFilter('lot-pins',f.length>1?f:null);
+  // Keep heart layer visible even when filters are active —
+  // saved lots should always show their heart regardless of filter state
+  if(map.getLayer('saved-lot-hearts'))map.setFilter('saved-lot-hearts',null);
 
   // Constraint overlay visibility
   const herVis = toolState.heritage ? 'visible' : 'none';
@@ -807,7 +879,8 @@ function renderPanel(d,tab) {
   actions.innerHTML=`
     <button class="w-action-btn w-action-gold" onclick="window.location.href='/generate-report.php?pid=${d.property.pid}'"><i class="fas fa-file-pdf"></i> Generate PDF Report</button>
     <button class="w-action-btn w-action-primary" onclick="inquireAcquisition('${d.property.pid}','${escHtml(d.property.address)}')"><i class="fas fa-handshake"></i> Inquire for Acquisition</button>
-    <button class="w-action-btn w-action-secondary" onclick="saveLot('${d.property.pid}')"><i class="far fa-bookmark"></i> Save Lot</button>`;
+    <button class="w-action-btn w-action-secondary" id="save-lot-btn" onclick="saveLot('${d.property.pid}')"><i class="far fa-heart"></i> Save Lot</button>`;
+  updateSaveButton(d.property.pid);
 }
 
 function renderPanelBody(d,tab) {
@@ -835,6 +908,7 @@ function renderStrataTab(d) {
       <div class="w-pf-row"><span>DCL + Permit Fees</span><span class="w-pf-val">${fmt(s.dcl_city_wide+s.dcl_utilities+s.permit_fees)}</span></div>
       ${s.contingency>0?`<div class="w-pf-row"><span>Peat Contingency</span><span class="w-pf-val" style="color:var(--amber)">${fmt(s.contingency)}</span></div>`:''}
       <div class="w-pf-row total"><span>Total Project Cost</span><span class="w-pf-val">${fmt(s.total_project_cost)}</span></div>
+      <div class="w-pf-row" style="margin-top:8px"><span>Avg sold / sqft</span><span class="w-pf-val" style="color:#777;font-size:12px">${d.market_data&&d.market_data.avg_sold_psf?'$'+Math.round(d.market_data.avg_sold_psf).toLocaleString()+'/sqft'+(d.market_data.using_fallback?' <span style="color:#bbb;font-size:10px">(fallback)</span>':''): '—'}</span></div>
       <div class="w-pf-row" style="margin-top:8px"><span>Exit Value</span><span class="w-pf-val">${fmt(s.exit_value)}</span></div>
       <div class="w-profit-box">
         <div class="w-profit-item"><div class="w-profit-label">Profit</div><div class="w-profit-val ${s.profit<0?'negative':''}">${fmt(s.profit)}</div></div>
@@ -888,7 +962,7 @@ function renderOutlookTab(d) {
         <div class="w-psf-row"><span>Current sold / sqft</span><span class="w-psf-val">${fmtK(o.current_finished_psf)}</span></div>
         <div class="w-psf-row" style="border-top:1px solid rgba(0,0,0,.06);margin-top:6px;padding-top:6px"><span style="font-weight:800;color:var(--navy)">Outlook / sqft</span><span class="w-psf-val" style="color:var(--green)">${fmtK(o.outlook_psf)}</span></div>
         <div class="w-outlook-pct ${pctClass}">${o.outlook_pct>0?'+':''}${o.outlook_pct.toFixed(1)}%</div>
-        <div class="w-conf-range">Range: ${o.confidence_low_pct.toFixed(1)}% to +${o.confidence_high_pct.toFixed(1)}% (${o.forecasts_used} sources)</div>
+        <div class="w-conf-range">Range: ${o.confidence_low_pct>=0?'+':''}${o.confidence_low_pct.toFixed(1)}% to ${o.confidence_high_pct>=0?'+':''}${o.confidence_high_pct.toFixed(1)}% &middot; ${o.forecasts_used} sources &middot; ${o.quarter||''}</div>
       </div>
     </div>
     <div class="w-section"><div class="w-section-title">Three-Layer Breakdown</div>
@@ -960,8 +1034,94 @@ function inquireAcquisition(pid,address){
   if(confirm(`Submit acquisition inquiry for:\n${address}\n\nOur team will contact you within 4 hours.`))
     fetch('/api/acquisition.php',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pid,address})}).then(r=>r.json()).then(d=>alert(d.success?'✓ Inquiry submitted.':'Something went wrong.'));
 }
+
+// ── Toast notification system ─────────────────────────────────
+function showToast(msg,type='success',duration=3000){
+  const wrap=document.getElementById('toast-wrap');
+  if(!wrap)return;
+  const icons={success:'<i class="fas fa-check-circle" style="margin-right:7px"></i>',info:'<i class="fas fa-info-circle" style="margin-right:7px"></i>',warn:'<i class="fas fa-exclamation-triangle" style="margin-right:7px"></i>'};
+  const el=document.createElement('div');
+  el.className=`w-toast ${type}`;
+  el.innerHTML=(icons[type]||'')+escHtml(msg);
+  wrap.appendChild(el);
+  requestAnimationFrame(()=>requestAnimationFrame(()=>el.classList.add('show')));
+  setTimeout(()=>{el.classList.remove('show');setTimeout(()=>el.remove(),280);},duration);
+}
+
+// ── Saved lot state ───────────────────────────────────────────
+let savedLotPids=new Set();
+// Cache of all lot features — populated once lots layer loads
+let _lotsCache = [];
+
+function loadSavedPids(){
+  if(!IS_LOGGED_IN)return;
+  fetch('/api/saved_lots.php').then(r=>r.json()).then(d=>{
+    if(d.success&&d.lots){
+      savedLotPids=new Set(d.lots.map(l=>l.pid));
+      updateSavedLotLayer();
+    }
+  }).catch(()=>{});
+}
+
+// Build heart layer from saved PIDs + lots GeoJSON cache
+function updateSavedLotLayer(){
+  if(!map.getSource('saved-lots')) return;
+  // If we don't have the lots cache yet, fetch it
+  if(_lotsCache.length===0){
+    const src=map.getSource('lots');
+    // Try to get from loaded source first
+    if(src&&src._data&&src._data.features&&src._data.features.length>0){
+      _lotsCache=src._data.features;
+    } else {
+      // Source not loaded yet — fetch directly
+      fetch('/api/lots.php').then(r=>r.json()).then(data=>{
+        if(data.features){ _lotsCache=data.features; _renderHearts(); }
+      }).catch(()=>{});
+      return;
+    }
+  }
+  _renderHearts();
+}
+
+function _renderHearts(){
+  if(!map.getSource('saved-lots')) return;
+  const heartFeatures = _lotsCache.filter(f=>savedLotPids.has(f.properties.pid));
+  map.getSource('saved-lots').setData({
+    type:'FeatureCollection',
+    features: heartFeatures
+  });
+}
+
+function updateSaveButton(pid){
+  const btn=document.getElementById('save-lot-btn');
+  if(!btn)return;
+  const saved=savedLotPids.has(pid);
+  btn.innerHTML=saved
+    ?'<i class="fas fa-heart" style="color:#ef4444"></i> Saved'
+    :'<i class="far fa-heart"></i> Save Lot';
+  btn.style.borderColor=saved?'rgba(239,68,68,.4)':'';
+}
+
 function saveLot(pid){
-  fetch('/api/save_lot.php',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pid})}).then(r=>r.json()).then(d=>{if(d.success)alert('✓ Lot saved.')});
+  fetch('/api/save_lot.php',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pid})})
+  .then(r=>r.json()).then(d=>{
+    if(d.success){
+      if(d.saved){savedLotPids.add(pid);showToast('Saved to Project Planner','success');}
+      else{savedLotPids.delete(pid);showToast('Removed from saved list','info');}
+      updateSaveButton(pid);
+      updateSavedLotLayer(); // ← refresh hearts on map
+    } else {showToast('Could not save lot. Please try again.','warn');}
+  }).catch(()=>showToast('Network error. Please try again.','warn'));
+}
+
+function inquireAcquisition(pid,address){
+  const msg=prompt(`Acquisition inquiry for:\n${address}\n\nAdd a message (optional — press Cancel to abort):`);
+  if(msg===null)return;
+  fetch('/api/inquire.php',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pid,message:msg.trim()})})
+  .then(r=>r.json()).then(d=>{
+    if(d.success)showToast(d.already_exists?'Inquiry already open — our team will be in touch.':'✓ Inquiry submitted. We\'ll contact you within 4 hours.',d.already_exists?'info':'success',4500);
+    else showToast('Something went wrong. Please try again.','warn');
+  }).catch(()=>showToast('Network error. Please try again.','warn'));
 }
 
 // ── Search ────────────────────────────────────────────────────

@@ -209,58 +209,87 @@ if (isset($_GET['hpi_template'])) {
 // Maps REBGV neighbourhood names to COV official slugs at save time.
 // Multiple REBGV areas map to one COV neighbourhood — data weighted by sales volume.
 $_rebgv_aliases = [
-    // Vancouver East → COV
-    'champlain heights'    => 'sunset',
+    // ── Vancouver East → COV ─────────────────────────────────
+    // Both clean names (Python-stripped) and VE/VW fallbacks included
+    'champlain heights'    => 'killarney',
+    'collingwood'          => 'renfrew-collingwood',
     'collingwood ve'       => 'renfrew-collingwood',
     'downtown ve'          => 'strathcona',
+    'fraser'               => 'kensington-cedar-cottage',
     'fraser ve'            => 'kensington-cedar-cottage',
+    'fraserview'           => 'victoria-fraserview',
     'fraserview ve'        => 'victoria-fraserview',
     'grandview woodland'   => 'grandview-woodland',
     'hastings'             => 'hastings-sunrise',
     'hastings sunrise'     => 'hastings-sunrise',
+    'killarney'            => 'killarney',
     'killarney ve'         => 'killarney',
-    'knight'               => 'knight',
-    'main'                 => 'kensington-cedar-cottage',
+    'knight'               => 'kensington-cedar-cottage',
+    'main'                 => 'mount-pleasant',
+    'mount pleasant'       => 'mount-pleasant',
     'mount pleasant ve'    => 'mount-pleasant',
+    'renfrew'              => 'renfrew-collingwood',
     'renfrew heights'      => 'renfrew-collingwood',
     'renfrew ve'           => 'renfrew-collingwood',
-    'south marine'         => 'renfrew-collingwood',
-    'south vancouver'      => 'victoria-fraserview',
+    'south marine'         => 'killarney',
+    'south vancouver'      => 'sunset',
     'strathcona'           => 'strathcona',
+    'victoria'             => 'victoria-fraserview',
     'victoria ve'          => 'victoria-fraserview',
-    // Vancouver West → COV
+    // ── Vancouver West → COV ─────────────────────────────────
+    'arbutus'              => 'arbutus-ridge',
     'arbutus ridge'        => 'arbutus-ridge',
+    'cambie'               => 'south-cambie',
     'coal harbour'         => 'downtown',
+    'downtown'             => 'downtown',
     'downtown vw'          => 'downtown',
+    'dunbar'               => 'dunbar-southlands',
     'dunbar southlands'    => 'dunbar-southlands',
+    'southlands'           => 'dunbar-southlands',
+    'fairview'             => 'fairview',
     'fairview vw'          => 'fairview',
-    'false creek'          => 'downtown',
+    'false creek'          => 'fairview',
     'kerrisdale'           => 'kerrisdale',
     'kitsilano'            => 'kitsilano',
-    'mackenzie heights'    => 'dunbar-southlands',
+    'mackenzie heights'    => 'arbutus-ridge',
     'marpole'              => 'marpole',
     'mount pleasant vw'    => 'mount-pleasant',
     'oakridge'             => 'oakridge',
+    'oakridge vw'          => 'oakridge',
     'point grey'           => 'west-point-grey',
-    'quilchena'            => 'shaughnessy',
+    'quilchena'            => 'kerrisdale',
     'riley park'           => 'riley-park',
     'shaughnessy'          => 'shaughnessy',
     'south cambie'         => 'south-cambie',
-    'south granville'      => 'shaughnessy',
-    'sw marine'            => 'marpole',
+    'south granville'      => 'south-cambie',
+    's.w. marine'          => 'south-cambie',
+    'sw marine'            => 'south-cambie',
+    's w marine'           => 'south-cambie',
+    'university'           => 'west-point-grey',
     'university vw'        => 'west-point-grey',
+    'west end'             => 'west-end',
     'west end vw'          => 'west-end',
     'yaletown'             => 'downtown',
 ];
 
 function _hpi_fuzzy_match(string $name, array $nb_lkp, array $aliases): ?int {
     $key = strtolower(trim($name));
+
+    // 1. Check aliases first (space-separated form e.g. 'fraser ve')
     if (isset($aliases[$key])) {
         $slug = $aliases[$key];
         return $nb_lkp[$slug] ?? null;
     }
-    $slug = preg_replace('/[^a-z0-9]+/','-', $key);
-    $slug = trim($slug,'-');
+
+    // 2. Convert to hyphenated slug and check aliases again (e.g. 'fraser-ve')
+    $slug = preg_replace('/[^a-z0-9]+/', '-', $key);
+    $slug = trim($slug, '-');
+    if (isset($aliases[$slug])) {
+        $mapped = $aliases[$slug];
+        return $nb_lkp[$mapped] ?? null;
+    }
+
+    // 3. Direct slug lookup — only if not overridden by alias above
     return $nb_lkp[$slug] ?? null;
 }
 
@@ -272,13 +301,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['hpi_bulk_confirm'])) 
     foreach ($rows as $r) {
         if (empty($r['nb_id']) || empty($r['month_dt'])) continue;
         $nb_id    = (int)$r['nb_id'];
+        $nb_slug  = $r['nb_slug'] ?? '';
         $month_dt = $r['month_dt'];
+        $psf_dup  = isset($r['psf_duplex']) && $r['psf_duplex'] !== '' ? (int)$r['psf_duplex'] : null;
+
+        // ── Write to neighbourhood_hpi_history ────────────────────────────
         $fields = [
             'avg_price'       => $r['price_duplex'] ?? null,
             'price_detached'  => $r['price_detached'] ?? null,
             'price_condo'     => $r['price_condo'] ?? null,
             'price_townhouse' => $r['price_townhouse'] ?? null,
             'price_duplex'    => $r['price_duplex'] ?? null,
+            'psf_duplex'      => $psf_dup,
             'hpi_change_mom'  => null,
             'hpi_change_yoy'  => $r['yoy_duplex'] ?? null,
             'dom_detached'    => $r['dom_detached'] ?? null,
@@ -302,9 +336,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['hpi_bulk_confirm'])) 
             $pdo->prepare("INSERT INTO neighbourhood_hpi_history (neighbourhood_id,month_year,$cols) VALUES (:nb_id,:month,$vals)")
                 ->execute(array_merge($fields, [':nb_id'=>$nb_id,':month'=>$month_dt]));
         }
+
+        // ── Write psf_duplex to monthly_market_stats (pro forma exit value) ─
+        // Only write if we have a $/sqft value and a valid COV slug
+        if ($psf_dup && $nb_slug) {
+            // Deactivate previous row for this neighbourhood + month
+            $pdo->prepare("
+                UPDATE monthly_market_stats
+                SET is_active = 0
+                WHERE neighbourhood_slug = ? AND data_month = ? AND csv_type = 'hpi_duplex'
+            ")->execute([$nb_slug, $month_dt]);
+
+            $pdo->prepare("
+                INSERT INTO monthly_market_stats
+                    (neighbourhood_slug, data_month, csv_type, price_per_sqft,
+                     sales_count, is_active, created_at)
+                VALUES (?, ?, 'hpi_duplex', ?, ?, 1, NOW())
+            ")->execute([
+                $nb_slug, $month_dt, $psf_dup,
+                $r['sales_duplex'] ?? null,
+            ]);
+        }
+
         $saved++;
     }
-    header("Location: plex-data.php?tab=market-prices&msg=" . urlencode("✅ HPI import complete — {$saved} neighbourhoods updated"));
+    header("Location: plex-data.php?tab=market-prices&msg=" . urlencode("✅ Upload complete — {$saved} neighbourhoods updated (HPI history + pro forma $/sqft)"));
     exit;
 }
 
@@ -340,6 +396,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['hpi_csv'])) {
             'nb_id'          => $nb_id,
             'nb_slug'        => $nb_slug,
             'month_dt'       => $month_dt,
+            'psf_duplex'     => $g('psf_duplex')     !== '' ? (int)str_replace([',','$'],'',$g('psf_duplex'))     : null,
             'price_detached' => $g('price_detached') !== '' ? (int)str_replace([',','$'],'',$g('price_detached')) : null,
             'price_duplex'   => $g('price_duplex')   !== '' ? (int)str_replace([',','$'],'',$g('price_duplex'))   : null,
             'price_condo'    => $g('price_condo')    !== '' ? (int)str_replace([',','$'],'',$g('price_condo'))    : null,
@@ -466,102 +523,56 @@ body{background:#f0f4f8;font-family:'Segoe UI',system-ui,sans-serif;margin:0;pad
       // ══════════════════════════════════════════════════════════════════════
 if ($active_tab === 'market-prices'): ?>
 
-<!-- ── Section A: REBGV Sold $/sqft ────────────────────────────────────────── -->
+<!-- ── Combined REBGV Monthly Upload ───────────────────────────────────────── -->
 <div class="card">
-    <h3><i class="fas fa-file-csv me-2" style="color:var(--blue)"></i>Section A — REBGV Sold $/sqft
+    <h3><i class="fas fa-file-csv me-2" style="color:var(--blue)"></i>REBGV Monthly Market Data
         <span class="freq-badge ms-2">Monthly</span></h3>
-    <p class="sub">Upload the REBGV new-build sold CSV (Yr Blt ≥ 2024). Geocoded via Mapbox. Feeds pro forma exit values and confidence tiers. Upload Duplex CSV first, then Detached CSV.</p>
+    <p class="sub">Upload the CSV produced by your Python pipeline script. One file per area per month — contains duplex $/sqft, prices by type, DOM, sales counts, and YoY%. Updates both the pro forma and Wynston Outlook in one pass.</p>
     <div class="info-box">
-        <strong>REBGV → COV mapping:</strong> Multiple REBGV sub-areas map to one COV neighbourhood (e.g. Collingwood VE + Renfrew VE + Renfrew Heights + Renfrew East → renfrew-collingwood).
-        The weighted average by sales volume is calculated automatically — more sales = more weight. No action needed.
+        <strong>Your monthly workflow:</strong>
+        Run <code style="background:#e8e4dd;padding:1px 5px;border-radius:3px;">python rebgv_pipeline.py 2026-03-Vancouver-East.pdf Duplex.csv</code>
+        → upload the output CSV here → done.<br><br>
+        <strong>Writes to:</strong>
+        <code>neighbourhood_hpi_history</code> — prices, DOM, YoY%, sales (Outlook Layer 2) ·
+        <code>monthly_market_stats</code> — duplex $/sqft (pro forma exit value)
     </div>
-
-    <div id="chA-result"></div>
-    <div class="row g-3 mb-3">
-        <div class="col-md-4">
-            <label class="form-label">Data Month</label>
-            <input type="month" id="chA_month" class="form-control" value="<?= date('Y-m') ?>">
-        </div>
-        <div class="col-md-4">
-            <label class="form-label">CSV Type</label>
-            <select id="chA_type" class="form-select">
-                <option value="duplex">Duplex (primary exit metric)</option>
-                <option value="detached">Detached (ceiling benchmark)</option>
-            </select>
-        </div>
-    </div>
-    <div class="dz" id="chA_dz" onclick="document.getElementById('chA_file').click()">
-        <div><i class="fas fa-file-csv dz-icon" id="chA_dz_icon"></i></div>
-        <div class="dz-text" id="chA_dz_text">Drag &amp; drop REBGV CSV here, or click to browse</div>
-        <input type="file" id="chA_file" accept=".csv" style="display:none">
-    </div>
-    <div id="chA_progress" style="display:none;margin-top:12px;padding:12px;background:#f0f4fb;border-radius:8px;font-size:13px;color:#002446;">
-        <i class="fas fa-spinner fa-spin me-2"></i><span id="chA_progress_msg">Parsing CSV…</span>
-    </div>
-    <div id="chA_stats" class="row g-2 mt-2"></div>
-    <div id="chA_errors" style="color:#b91c1c;font-size:12px;margin-top:8px;"></div>
-    <button class="btn-primary-w mt-3" id="chA_submit" onclick="submitChannelA()">
-        <i class="fas fa-upload"></i>Upload &amp; Process
-    </button>
-    <div id="chA_preview" style="display:none;margin-top:16px;overflow-x:auto;max-height:360px;overflow-y:auto;">
-        <div id="chA_table_wrap"></div>
-    </div>
-</div>
-
-<hr class="section-divider">
-
-<!-- ── Section B: Neighbourhood HPI Bulk ───────────────────────────────────── -->
-<div class="card">
-    <h3><i class="fas fa-table me-2" style="color:var(--blue)"></i>Section B — Neighbourhood HPI &amp; DOM Bulk Import
-        <span class="freq-badge ms-2">Monthly</span></h3>
-    <p class="sub">Upload REBGV HPI report data — average prices, days on market, YoY%, and sales counts per neighbourhood. Feeds the Wynston Outlook local momentum layer and market velocity display.</p>
-    <div class="info-box">
-        <strong>What this feeds:</strong> DOM (days on market) for the map side panel velocity arrow.
-        Price by type for the Outlook Layer 2 local momentum signal.
-        Sales count for the confidence tier (T1 = 5+ duplex sales).
-    </div>
-
     <div id="hpi-result"></div>
-
     <div class="row g-3 mb-3">
         <div class="col-md-3">
             <label class="form-label">Data Month</label>
             <input type="month" id="hpi_month" class="form-control" value="<?= date('Y-m') ?>">
         </div>
         <div class="col-md-4">
-            <label class="form-label">Area Template</label>
-            <select id="hpi_area" class="form-select" onchange="updateHpiTemplateLink()">
+            <label class="form-label">Area (for template only)</label>
+            <select id="hpi_area" class="form-select">
                 <option value="vancouver-east">Vancouver East</option>
                 <option value="vancouver-west">Vancouver West</option>
             </select>
         </div>
         <div class="col-md-5" style="display:flex;align-items:flex-end;">
-            <a id="hpi_tpl_link" href="#" class="btn-outline" style="font-size:12px;" onclick="downloadHpiTemplate(event)">
+            <a href="#" class="btn-outline" style="font-size:12px;" onclick="downloadHpiTemplate(event)">
                 <i class="fas fa-download me-1"></i>Download Template
             </a>
         </div>
     </div>
-
     <div class="dz" id="hpi_dz" onclick="document.getElementById('hpi_file').click()">
         <div><i class="fas fa-file-csv dz-icon" id="hpi_dz_icon"></i></div>
-        <div class="dz-text" id="hpi_dz_text">Drag &amp; drop HPI CSV here, or click to browse</div>
+        <div class="dz-text" id="hpi_dz_text">Drag &amp; drop Python pipeline CSV here, or click to browse</div>
         <input type="file" id="hpi_file" accept=".csv" style="display:none">
     </div>
-
     <button class="btn-primary-w mt-3" onclick="uploadHpiCsv()">
         <i class="fas fa-eye"></i>Preview &amp; Match
     </button>
-
     <div id="hpi_preview_wrap" style="display:none;margin-top:20px;">
-        <h5 style="font-size:13px;font-weight:700;color:#002446;margin-bottom:10px;">Preview — Review before saving</h5>
+        <h5 style="font-size:13px;font-weight:700;color:#002446;margin-bottom:10px;">Preview — review before saving</h5>
         <div id="hpi_unmatched_warn" style="display:none;margin-bottom:10px;"></div>
         <div style="overflow-x:auto;max-height:400px;overflow-y:auto;">
-        <table class="preview-table" id="hpi_preview_table">
+        <table class="preview-table">
             <thead><tr>
                 <th><input type="checkbox" id="hpiCheckAll"> All</th>
                 <th>REBGV Name</th><th>→ COV Neighbourhood</th>
-                <th>Price Duplex</th><th>DOM Duplex</th>
-                <th>Sales Duplex</th><th>YoY %</th>
+                <th>$/sqft</th><th>Duplex Avg $</th>
+                <th>DOM</th><th>Sales</th><th>YoY%</th>
             </tr></thead>
             <tbody id="hpi_preview_tbody"></tbody>
         </table>
@@ -571,31 +582,27 @@ if ($active_tab === 'market-prices'): ?>
             <input type="hidden" name="hpi_rows_json" id="hpi_rows_json" value="[]">
             <div class="d-flex gap-3 mt-3">
                 <button type="button" class="btn-primary-w" onclick="submitHpiBulk()">
-                    <i class="fas fa-save"></i>Save Selected Rows
+                    <i class="fas fa-save"></i>Save All Matched Rows
                 </button>
-                <button type="button" class="btn-outline" onclick="document.getElementById('hpi_preview_wrap').style.display='none'">
-                    Cancel
-                </button>
+                <button type="button" class="btn-outline" onclick="document.getElementById('hpi_preview_wrap').style.display='none'">Cancel</button>
             </div>
         </form>
     </div>
-
     <?php if (!empty($hpi_recent)): ?>
     <div style="margin-top:20px;overflow-x:auto;max-height:260px;overflow-y:auto;">
-        <div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Recent HPI Data</div>
+        <div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Last Upload</div>
         <table class="preview-table">
-            <thead><tr><th>Neighbourhood</th><th>Month</th><th>Duplex Avg $</th><th>DOM</th><th>Sales</th><th>YoY%</th></tr></thead>
+            <thead><tr><th>Neighbourhood</th><th>Month</th><th>$/sqft</th><th>Duplex Avg $</th><th>DOM</th><th>Sales</th><th>YoY%</th></tr></thead>
             <tbody>
             <?php foreach ($hpi_recent as $h): ?>
             <tr>
                 <td style="font-weight:600;"><?= htmlspecialchars($h['name']) ?></td>
                 <td><?= date('M Y', strtotime($h['month_year'])) ?></td>
+                <td style="font-weight:700;color:#002446;"><?= isset($h['psf_duplex']) && $h['psf_duplex'] ? '$'.number_format($h['psf_duplex']) : '—' ?></td>
                 <td><?= $h['price_duplex'] ? '$'.number_format($h['price_duplex']) : '—' ?></td>
                 <td><?= $h['dom_duplex'] ?? '—' ?></td>
                 <td><?= $h['sales_duplex'] ?? '—' ?></td>
-                <td style="color:<?= ($h['hpi_change_yoy']??0)>=0?'#15803d':'#b91c1c' ?>">
-                    <?= $h['hpi_change_yoy'] !== null ? (($h['hpi_change_yoy']>=0?'+':'').number_format((float)$h['hpi_change_yoy'],1).'%') : '—' ?>
-                </td>
+                <td style="color:<?= ($h['hpi_change_yoy']??0)>=0?'#15803d':'#b91c1c' ?>"><?= $h['hpi_change_yoy'] !== null ? (($h['hpi_change_yoy']>=0?'+':'').number_format((float)$h['hpi_change_yoy'],1).'%') : '—' ?></td>
             </tr>
             <?php endforeach; ?>
             </tbody>
@@ -837,7 +844,11 @@ elseif ($active_tab === 'outlook'): ?>
             </select>
         </div>
     </div>
-    <h5 style="font-size:12px;font-weight:700;color:#555;margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px;">Bank/Broker Forecasts — YoY $/PSF Change (%)</h5>
+    <h5 style="font-size:12px;font-weight:700;color:#555;margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px;">Bank/Broker Metro Vancouver Price Forecast — YoY % Change</h5>
+    <div style="font-size:11px;color:#888;margin-bottom:14px;background:#f9f6f0;border-radius:6px;padding:8px 12px;border-left:3px solid #c9a84c;">
+        Enter each institution's published YoY price change forecast for Metro Vancouver residential (e.g. RBC: <strong>-3.2</strong>, BCREA: <strong>+1.9</strong>).
+        These are broad market % forecasts — your local duplex $/sqft data provides the neighbourhood-specific calibration automatically via Layer 2.
+    </div>
     <div class="sources-grid" id="sources-grid">
         <?php
         $default_sources = ['RBC','TD','BMO','BCREA','RE-MAX','Royal LePage'];
@@ -847,15 +858,10 @@ elseif ($active_tab === 'outlook'): ?>
         ?>
         <div class="source-row">
             <label><?= $src ?></label>
-            <div class="row g-2">
-                <div class="col-7"><div class="input-group">
-                    <input type="number" step="0.1" class="form-control src-forecast"
-                           data-source="<?= $src ?>" placeholder="e.g. 4.5" value="<?= htmlspecialchars($ev) ?>">
-                    <span class="input-group-text" style="font-size:12px;">%</span>
-                </div></div>
-                <div class="col-5">
-                    <input type="date" class="form-control src-date" data-source="<?= $src ?>" value="<?= date('Y-m-d') ?>">
-                </div>
+            <div class="input-group" style="max-width:220px;">
+                <input type="number" step="0.1" class="form-control src-forecast"
+                       data-source="<?= $src ?>" placeholder="e.g. -3.2" value="<?= htmlspecialchars($ev) ?>">
+                <span class="input-group-text" style="font-size:12px;">%</span>
             </div>
         </div>
         <?php endforeach; ?>
@@ -1262,6 +1268,7 @@ function uploadHpiCsv(){
             tr.innerHTML='<td><input type="checkbox" class="hpi-row-cb" data-idx="'+i+'"'+(matched?' checked':'')+' '+(matched?'':'disabled')+'></td>'+
                 '<td style="font-weight:600;">'+esc(r.nb_name_rebgv)+'</td>'+
                 '<td style="color:'+(matched?'#15803d':'#b91c1c')+';font-weight:600;">'+(matched?esc(r.nb_slug):'⚠ No match')+'</td>'+
+                '<td style="font-weight:700;color:#002446;">'+(r.psf_duplex?'$'+r.psf_duplex.toLocaleString():'—')+'</td>'+
                 '<td>'+(r.price_duplex?'$'+r.price_duplex.toLocaleString():'—')+'</td>'+
                 '<td>'+(r.dom_duplex??'—')+'</td>'+
                 '<td>'+(r.sales_duplex??'—')+'</td>'+
@@ -1475,8 +1482,11 @@ function saveOutlookInputs(){
     document.querySelectorAll('.src-forecast').forEach(function(inp){
         if(!inp.value)return;
         var src=inp.dataset.source;
-        var date=document.querySelector('.src-date[data-source="'+src+'"]');
-        sources.push({source_name:src,forecast_psf_yoy:inp.value,forecast_date:date?date.value:''});
+        // Derive forecast date from quarter (e.g. 2026-Q1 → 2026-01-01)
+        var qparts = quarter.match(/(\d{4})-Q(\d)/);
+        var qmonth = qparts ? String((parseInt(qparts[2])-1)*3+1).padStart(2,'0') : '01';
+        var forecastDate = qparts ? qparts[1]+'-'+qmonth+'-01' : '';
+        sources.push({source_name:src,forecast_psf_yoy:inp.value,forecast_date:forecastDate});
     });
     if(!sources.length){showR('outlook-result','Enter at least one forecast value.','err');return;}
     postJSON('api/plex_outlook.php',{action:'save_inputs',quarter:quarter,sources:sources},function(d){if(d.success)showR('outlook-result','✅ '+d.message,'ok');else showR('outlook-result','❌ '+(d.error||'Error'),'err');});

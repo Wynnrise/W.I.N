@@ -64,8 +64,9 @@ try {
 
 // ── 3. Market stats — REBGV sold $/sqft ──────────────────────
 // Queries monthly_market_stats by COV neighbourhood_slug.
-// Multiple REBGV sub-areas already consolidated to COV slug at upload time.
-// AVG weighted by row count (more sales = more rows = more weight automatically).
+// csv_type 'hpi_duplex' = from Python pipeline (neighbourhood-level median)
+// csv_type 'duplex'     = from individual transaction CSV (Paragon sold)
+// Both types are valid — hpi_duplex preferred (more complete coverage)
 $market_sold = null;
 try {
     $stmt = $pdo->prepare("
@@ -76,7 +77,7 @@ try {
             MAX(days_on_market)  AS dom_duplex
         FROM monthly_market_stats
         WHERE neighbourhood_slug = ?
-          AND csv_type IN ('duplex','detached')
+          AND csv_type IN ('hpi_duplex','duplex','detached')
           AND is_active = 1
           AND price_per_sqft > 0
         LIMIT 1
@@ -305,29 +306,59 @@ try {
     }
 } catch (PDOException $e) { /* table not yet populated — Layer 4 = 0 */ }
 
-// ── Wynston Outlook ───────────────────────────────────────────
+// ── Wynston Outlook — read pre-calculated row from wynston_outlook ────────
 $outlook = null;
-if (count($bank_forecasts) >= 4 && $market) {
-    $nb_hpi = 5.0; $metro_hpi = 5.0;
-    try {
-        $stmt = $pdo->prepare("SELECT hpi_change_yoy FROM neighbourhood_hpi_history h JOIN neighbourhoods n ON h.neighbourhood_id = n.id WHERE n.slug = ? ORDER BY month_year DESC LIMIT 1");
-        $stmt->execute([$slug]);
-        $nb_hpi = (float)($stmt->fetchColumn() ?: 5.0);
-        $stmt = $pdo->prepare("SELECT hpi_change_yoy FROM neighbourhood_hpi_history h JOIN neighbourhoods n ON h.neighbourhood_id = n.id WHERE n.slug = 'metro-vancouver' ORDER BY month_year DESC LIMIT 1");
-        $stmt->execute();
-        $metro_hpi = (float)($stmt->fetchColumn() ?: 5.0);
-    } catch (PDOException $e) {}
+try {
+    $stmt = $pdo->prepare("
+        SELECT weighted_outlook, confidence_tier, confidence_band_low,
+               confidence_band_high, macro_signal, local_momentum,
+               pipeline_signal, comp_count, quarter, calculated_at
+        FROM wynston_outlook
+        WHERE neighbourhood_slug = ?
+          AND is_active = 1
+        ORDER BY calculated_at DESC
+        LIMIT 1
+    ");
+    $stmt->execute([$slug]);
+    $outlook_row = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    $outlook = $calculator->calculateWynstonOutlook(
-        current_finished_psf: $avg_sold_psf, current_build_psf: $build_cost_psf,
-        bank_forecasts: $bank_forecasts, neighbourhood_hpi_yoy: $nb_hpi,
-        metro_hpi_yoy: $metro_hpi, dom_trending_down: ($dom_diff < -1),
-        sales_above_average: ($sales_count > 5), units_in_pipeline: $pipeline_count,
-        neighbourhood_avg_pipeline: $pipeline_avg, sales_count: $sales_count,
-        household_growth_pct: $household_growth_pct,
-        unit_growth_pct: $unit_growth_pct
-    );
-}
+    if ($outlook_row) {
+        $w_outlook        = (float)$outlook_row['weighted_outlook'];
+        $current_psf      = (float)($market_sold['avg_sold_psf_duplex'] ?? 985.00);
+        $outlook_psf      = round($current_psf * (1 + $w_outlook / 100), 2);
+        $current_margin   = round($current_psf - $build_cost_psf, 2);
+        $projected_margin = round($outlook_psf  - $build_cost_psf, 2);
+        $tier             = (int)$outlook_row['confidence_tier'];
+
+        $weights_map = [
+            1 => ['macro' => 0.40, 'local' => 0.40, 'pipeline' => 0.20],
+            2 => ['macro' => 0.55, 'local' => 0.25, 'pipeline' => 0.20],
+            3 => ['macro' => 0.70, 'local' => 0.10, 'pipeline' => 0.20],
+        ];
+        $weights_used = $weights_map[$tier] ?? $weights_map[3];
+
+        $outlook = [
+            'outlook_pct'            => $w_outlook,
+            'outlook_psf'            => $outlook_psf,
+            'current_finished_psf'   => $current_psf,
+            'current_build_psf'      => $build_cost_psf,
+            'current_margin_psf'     => $current_margin,
+            'projected_margin_psf'   => $projected_margin,
+            'margin_improvement_psf' => round($projected_margin - $current_margin, 2),
+            'confidence_tier'        => $tier,
+            'confidence_low_pct'     => (float)$outlook_row['confidence_band_low'],
+            'confidence_high_pct'    => (float)$outlook_row['confidence_band_high'],
+            'macro_signal_pct'       => (float)$outlook_row['macro_signal'],
+            'local_momentum_pct'     => (float)$outlook_row['local_momentum'],
+            'pipeline_signal_pct'    => (float)$outlook_row['pipeline_signal'],
+            'weights_used'           => $weights_used,
+            'comp_count'             => (int)$outlook_row['comp_count'],
+            'forecasts_used'         => count($bank_forecasts),
+            'quarter'                => $outlook_row['quarter'],
+            'calculated_at'          => $outlook_row['calculated_at'],
+        ];
+    }
+} catch (PDOException $e) { $outlook = null; }
 
 $confidence_tier = $calculator->getConfidenceTier($sales_count);
 

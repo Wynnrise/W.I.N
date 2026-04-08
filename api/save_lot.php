@@ -1,7 +1,9 @@
 <?php
 // api/save_lot.php
 // POST: save or unsave a lot for the logged-in developer
-// Body: { pid, action: 'save'|'unsave'|'toggle', notes: '' }
+// Body: { pid, action? }
+//   action = 'toggle'  (default) — saves if not saved, unsaves if saved
+//   action = 'unsave'            — always removes (used by dashboard Remove button)
 
 session_start([
     'cookie_lifetime' => 86400,
@@ -37,46 +39,43 @@ try {
 }
 
 $input  = json_decode(file_get_contents('php://input'), true);
-$pid    = trim($input['pid'] ?? '');
-$action = $input['action'] ?? 'toggle';
-$notes  = trim($input['notes'] ?? '');
-$dev_id = (int) $_SESSION['dev_id'];
+$pid    = trim($input['pid']    ?? '');
+$action = trim($input['action'] ?? 'toggle');
+$dev_id = (int)$_SESSION['dev_id'];
 
 if (!$pid) {
     echo json_encode(['success' => false, 'error' => 'PID required']);
     exit;
 }
 
-// Get address from plex_properties
-$stmt = $pdo->prepare("SELECT address FROM plex_properties WHERE pid = ? LIMIT 1");
-$stmt->execute([$pid]);
-$lot = $stmt->fetch(PDO::FETCH_ASSOC);
-$address = $lot['address'] ?? $pid;
-
 // Check if already saved
-$stmt = $pdo->prepare("SELECT id FROM saved_lots WHERE developer_id = ? AND pid = ?");
+$stmt = $pdo->prepare("SELECT id FROM saved_lots WHERE developer_id = ? AND pid = ? LIMIT 1");
 $stmt->execute([$dev_id, $pid]);
-$existing = $stmt->fetch(PDO::FETCH_ASSOC);
-
-if ($action === 'toggle') {
-    $action = $existing ? 'unsave' : 'save';
-}
+$existing = $stmt->fetchColumn();
 
 if ($action === 'unsave') {
-    $stmt = $pdo->prepare("DELETE FROM saved_lots WHERE developer_id = ? AND pid = ?");
-    $stmt->execute([$dev_id, $pid]);
+    // Always remove
+    $pdo->prepare("DELETE FROM saved_lots WHERE developer_id = ? AND pid = ?")->execute([$dev_id, $pid]);
+    echo json_encode(['success' => true, 'saved' => false, 'message' => 'Lot removed from saved list']);
+    exit;
+}
+
+// Toggle
+if ($existing) {
+    // Already saved — unsave it
+    $pdo->prepare("DELETE FROM saved_lots WHERE developer_id = ? AND pid = ?")->execute([$dev_id, $pid]);
     echo json_encode(['success' => true, 'saved' => false, 'message' => 'Lot removed from saved list']);
 } else {
-    // save
-    if ($existing) {
-        if ($notes) {
-            $stmt = $pdo->prepare("UPDATE saved_lots SET notes = ? WHERE developer_id = ? AND pid = ?");
-            $stmt->execute([$notes, $dev_id, $pid]);
-        }
-        echo json_encode(['success' => true, 'saved' => true, 'message' => 'Already saved']);
-    } else {
-        $stmt = $pdo->prepare("INSERT INTO saved_lots (developer_id, pid, address, notes) VALUES (?, ?, ?, ?)");
-        $stmt->execute([$dev_id, $pid, $address, $notes ?: null]);
-        echo json_encode(['success' => true, 'saved' => true, 'message' => 'Lot saved']);
-    }
+    // Not saved — get address from plex_properties
+    $stmt = $pdo->prepare("SELECT address FROM plex_properties WHERE pid = ? LIMIT 1");
+    $stmt->execute([$pid]);
+    $address = $stmt->fetchColumn() ?: '';
+
+    $pdo->prepare("
+        INSERT INTO saved_lots (developer_id, pid, address, saved_at)
+        VALUES (?, ?, ?, NOW())
+        ON DUPLICATE KEY UPDATE saved_at = NOW()
+    ")->execute([$dev_id, $pid, $address]);
+
+    echo json_encode(['success' => true, 'saved' => true, 'message' => 'Lot saved to Project Planner']);
 }
