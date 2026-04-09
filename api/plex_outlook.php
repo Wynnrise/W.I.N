@@ -244,13 +244,42 @@ if ($action === 'calculate') {
         // FLAG 3: hardcoded at 3 until Session 04 wires live multi_2025 data
         $pipeline_avg     = 3;
         $nb_pipeline      = 3; // will be replaced with live query in Session 04
-        $pipeline_signal  = ($nb_pipeline - $pipeline_avg) * 0.5; // small delta signal
+        $pipeline_signal  = ($nb_pipeline - $pipeline_avg) * 0.5;
 
-        // ── Weighted outlook ───────────────────────────────────────────────────
+        // Layer 4: Population signal (supply-demand gap from Census data)
+        $population_signal = 0.0;
+        $pop_q = $pdo->prepare("
+            SELECT census_year, total_households, housing_units_total
+            FROM neighbourhood_population
+            WHERE neighbourhood_slug = ?
+            ORDER BY census_year ASC
+        ");
+        $pop_q->execute([$slug]);
+        $pop_rows = $pop_q->fetchAll(PDO::FETCH_ASSOC);
+        if (count($pop_rows) >= 2) {
+            $pop_old = $pop_rows[0];
+            $pop_new = $pop_rows[count($pop_rows) - 1];
+            $hh_old  = (int)$pop_old['total_households'];
+            $hh_new  = (int)$pop_new['total_households'];
+            $un_old  = (int)$pop_old['housing_units_total'];
+            $un_new  = (int)$pop_new['housing_units_total'];
+            if ($hh_old > 0 && $un_old > 0) {
+                $hh_growth         = (($hh_new - $hh_old) / $hh_old) * 100;
+                $unit_growth       = (($un_new - $un_old) / $un_old) * 100;
+                $gap               = $hh_growth - $unit_growth;
+                $population_signal = max(-5.0, min(5.0, $gap * 0.3));
+            }
+        }
+
+        // Pipeline and population split the pipeline weight (10% each)
+        $pipeline_weight   = $weights['pipeline'] * 0.5;
+        $population_weight = $weights['pipeline'] * 0.5;
+
         $weighted_outlook = round(
-            ($macro_signal   * $weights['macro'])   +
-            ($local_momentum * $weights['local'])   +
-            ($pipeline_signal* $weights['pipeline']),
+            ($macro_signal      * $weights['macro'])  +
+            ($local_momentum    * $weights['local'])  +
+            ($pipeline_signal   * $pipeline_weight)    +
+            ($population_signal * $population_weight),
             2
         );
 

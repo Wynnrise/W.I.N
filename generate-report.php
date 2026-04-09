@@ -171,9 +171,9 @@ if ($pro_forma_path==='strata') {
     $exit_value = $saleable * $current_psf;
     $profit     = $exit_value - $total_cost;
     $roi        = $total_cost>0 ? ($profit/$total_cost)*100 : 0;
-    if ($max_units===6)      { foreach([1,2,2,2,2,3] as $br) $unit_mix[]=['br'=>$br,'sqft'=>round($saleable/6),'price'=>round(($saleable/6)*$current_psf)]; }
-    elseif ($max_units===4)  { foreach([1,2,2,3] as $br) $unit_mix[]=['br'=>$br,'sqft'=>round($saleable/4),'price'=>round(($saleable/4)*$current_psf)]; }
-    else                     { foreach([2,2] as $br) $unit_mix[]=['br'=>$br,'sqft'=>round($saleable/max($max_units,2)),'price'=>round(($saleable/max($max_units,2))*$current_psf)]; }
+    $bw=[1=>0.75,2=>1.00,3=>1.35];$bs=[6=>[1,2,2,2,2,3],4=>[1,2,2,3],3=>[2,2,2],2=>[2,2]];
+    $mb=$bs[min($max_units,6)]??[2,2];$tw=0;foreach($mb as $b)$tw+=$bw[$b]??1;
+    foreach($mb as $b){$us=$tw>0?round($saleable*(($bw[$b]??1)/$tw)):round($saleable/count($mb));$unit_mix[]=['br'=>$b,'sqft'=>$us,'price'=>round($us*$current_psf)];}
 } else {
     $cmhcs=$pdo->prepare("SELECT benchmark_1br, cmhc_rent_2br AS benchmark_2br, benchmark_3br FROM cmhc_benchmarks WHERE neighbourhood_slug=? ORDER BY year DESC LIMIT 1");
     $cmhcs->execute([$nb_slug]); $cmhc=$cmhcs->fetch();
@@ -190,15 +190,20 @@ $current_margin = $current_psf - $build_psf;
 // ── Outlook ───────────────────────────────────────────────────────────────────
 $outlook_pct=null; $outlook_psf=null; $proj_margin=null; $outlook_data=null; $outlook_quarter=null; $outlook_sources=[];
 try {
-    $os=$pdo->prepare("SELECT weighted_outlook,outlook_psf,macro_signal,local_momentum,pipeline_signal,population_signal,confidence_band_low,confidence_band_high,quarter,confidence_tier FROM wynston_outlook WHERE neighbourhood_slug=? AND is_active=1 ORDER BY calculated_at DESC LIMIT 1");
+    $os=$pdo->prepare("SELECT weighted_outlook, macro_signal, local_momentum, pipeline_signal, confidence_band_low, confidence_band_high, quarter, confidence_tier FROM wynston_outlook WHERE neighbourhood_slug=? AND is_active=1 ORDER BY calculated_at DESC LIMIT 1");
     $os->execute([$nb_slug]); $or2=$os->fetch();
     if ($or2) {
-        $outlook_pct=$or2['weighted_outlook']; $outlook_psf=$or2['outlook_psf']??($current_psf*(1+$outlook_pct/100));
-        $proj_margin=$outlook_psf-$build_psf; $outlook_quarter=$or2['quarter'];
-        $tier=$or2['confidence_tier']??'tier3';
-        $mw=$tier==='tier1'?0.38:($tier==='tier2'?0.53:0.68); $lw=$tier==='tier1'?0.38:($tier==='tier2'?0.23:0.08);
-        $outlook_data=['macro'=>$or2['macro_signal'],'local'=>$or2['local_momentum'],'pipeline'=>$or2['pipeline_signal'],'population'=>$or2['population_signal']??0,'mw'=>$mw,'lw'=>$lw,'pw'=>0.12,'pw2'=>0.12,'low'=>$or2['confidence_band_low']??null,'high'=>$or2['confidence_band_high']??null];
-        $srcs=$pdo->query("SELECT DISTINCT source_name FROM wynston_outlook_inputs WHERE is_active=1 ORDER BY id LIMIT 6"); $outlook_sources=$srcs->fetchAll(PDO::FETCH_COLUMN);
+        $outlook_pct  = (float)$or2['weighted_outlook'];
+        $outlook_psf  = round($current_psf * (1 + $outlook_pct / 100), 2);
+        $proj_margin  = $outlook_psf - $build_psf;
+        $outlook_quarter = $or2['quarter'];
+        $tier = (int)$or2['confidence_tier'];
+        $mw = $tier===1 ? 0.40 : ($tier===2 ? 0.55 : 0.70);
+        $lw = $tier===1 ? 0.40 : ($tier===2 ? 0.25 : 0.10);
+        $pw = 0.10; $pw2 = 0.10;
+        $outlook_data = ['macro'=>(float)$or2['macro_signal'],'local'=>(float)$or2['local_momentum'],'pipeline'=>(float)$or2['pipeline_signal'],'population'=>0,'mw'=>$mw,'lw'=>$lw,'pw'=>$pw,'pw2'=>$pw2,'low'=>(float)$or2['confidence_band_low'],'high'=>(float)$or2['confidence_band_high']];
+        $srcs=$pdo->query("SELECT DISTINCT source_name FROM wynston_outlook_inputs WHERE is_active=1 ORDER BY id LIMIT 6");
+        $outlook_sources=$srcs->fetchAll(PDO::FETCH_COLUMN);
     }
 } catch(PDOException $e){}
 
@@ -213,7 +218,8 @@ if ($lat&&$lng) { try { $ss=$pdo->prepare("SELECT stop_name,(6371000*ACOS(COS(RA
 // ── Aerial ────────────────────────────────────────────────────────────────────
 $aerial_base64='';
 if ($lat&&$lng) {
-    $url="https://api.mapbox.com/styles/v1/mapbox/satellite-streets-v12/static/{$lng},{$lat},17,0/800x400@2x?access_token=pk.eyJ1IjoiaGVucmluZ3V5ZW4iLCJhIjoiY21uYjg3dTNnMHFkZjJwcHR0bjkwb29ueCJ9.De7GXPlYRlzTJOr9jd5BJg";
+    $pin="pin-l+c9a84c({$lng},{$lat})";
+    $url="https://api.mapbox.com/styles/v1/mapbox/satellite-streets-v12/static/{$pin}/{$lng},{$lat},17,0/800x400@2x?access_token=pk.eyJ1IjoiaGVucmluZ3V5ZW4iLCJhIjoiY21uYjg3dTNnMHFkZjJwcHR0bjkwb29ueCJ9.De7GXPlYRlzTJOr9jd5BJg";
     $ch=curl_init($url); curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>8,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_FOLLOWLOCATION=>true]);
     $data=curl_exec($ch); curl_close($ch);
     if ($data&&strlen($data)>1000) $aerial_base64=base64_encode($data);
@@ -400,26 +406,87 @@ table.t tr:nth-child(even) td{background:#f9f6f0}
 
 /* PRINT */
 @media print{
-    @page{margin:14mm 12mm;size:letter portrait}
-    body{background:#fff;font-size:11px}
+    /* Suppress browser URL/date headers and footers */
+    @page{
+        margin:0;
+        size:letter portrait;
+    }
+    @page:first{ margin:0; }
+
+    *{
+        -webkit-print-color-adjust:exact!important;
+        print-color-adjust:exact!important;
+        color-adjust:exact!important;
+    }
+
+    /* Add padding to body instead of page margin
+       so backgrounds bleed to edge but content has breathing room */
+    html,body{
+        margin:0;padding:0;
+        background:#fff;
+        font-size:11px;
+        -webkit-print-color-adjust:exact!important;
+    }
+
     .print-bar{display:none!important}
-    .report-wrap{max-width:100%;box-shadow:none}
-    .sec{padding:20px 28px;page-break-inside:avoid}
-    .cover{page-break-after:always}
-    .cover-inner{padding:28px 36px 24px}
-    .cover-address{font-size:24px}
-    .cover-aerial{height:220px}
-    .sec-title{font-size:16px}
+    .report-wrap{max-width:100%;box-shadow:none;margin:0;padding:0}
+
+    /* Cover — full navy page, no margin */
+    .cover{
+        page-break-after:always;
+        break-after:page;
+        min-height:100vh;
+        margin:0;
+    }
+    .cover-inner{padding:32px 48px 28px}
+    .cover-address{font-size:26px}
+    .cover-aerial{height:240px}
+    .cover-foot{padding:14px 48px 20px}
+
+    /* Sections — flow naturally, no forced breaks per section
+       Only avoid breaking INSIDE small atomic elements */
+    .sec{
+        padding:16px 48px;
+        border-bottom:1px solid #e2e8f0;
+        page-break-inside:auto;
+        break-inside:auto;
+    }
+    .sec-hdr{
+        page-break-after:avoid;
+        break-after:avoid;
+    }
+
+    /* Keep these small elements together */
+    .kpi{page-break-inside:avoid;break-inside:avoid}
+    .bp-outer{page-break-inside:avoid;break-inside:avoid}
+    .risk{page-break-inside:avoid;break-inside:avoid}
+    .pf-total{page-break-inside:avoid;break-inside:avoid}
+    .profit-box{page-break-inside:avoid;break-inside:avoid}
+    .dim-row{page-break-inside:avoid;break-inside:avoid}
+    .psf-row{page-break-inside:avoid;break-inside:avoid;gap:8px}
+    .kpi-row{page-break-inside:avoid;break-inside:avoid;gap:8px}
+    .ol-row{page-break-inside:avoid;break-inside:avoid}
+    .mrow{page-break-inside:avoid;break-inside:avoid}
+    table{page-break-inside:auto;break-inside:auto}
+    tr{page-break-inside:avoid;break-inside:avoid}
+
+    /* Tighter font sizes for print */
+    .sec-title{font-size:15px}
     .kpi-v{font-size:14px}
     .psf-v{font-size:18px}
-    .profit-val{font-size:22px}
+    .profit-val{font-size:20px}
     .dim-v{font-size:16px}
-    table.t th,table.t td{padding:7px 9px;font-size:10px}
-    .back{padding:28px 36px;page-break-before:always}
-    .bp-outer{page-break-inside:avoid}
-    .risk{page-break-inside:avoid}
-    .psf-row{gap:8px}
-    .kpi-row{gap:8px}
+    table.t th,table.t td{padding:6px 8px;font-size:10px}
+
+    /* Back cover — new page, full navy */
+    .back{
+        padding:32px 48px;
+        page-break-before:always;
+        break-before:page;
+        min-height:100vh;
+        margin:0;
+    }
+    .back-gbar{margin:28px -48px -32px}
 }
 </style>
 </head>
@@ -692,7 +759,16 @@ table.t tr:nth-child(even) td{background:#f9f6f0}
     <div style="font-size:10px;color:rgba(249,246,240,.6);letter-spacing:4px;text-transform:uppercase;margin-bottom:20px">Intelligent Navigator · W.I.N</div>
     <div class="back-div"></div>
     <div class="agent-row">
-        <div class="agent-ph"></div>
+        <?php
+        $lp=$developer['report_logo_path']??null;
+        $lf=$lp?__DIR__.'/'.ltrim($lp,'/'):null;
+        if($lf&&file_exists($lf)):
+            $lext=strtolower(pathinfo($lf,PATHINFO_EXTENSION));
+            $lmime=in_array($lext,['jpg','jpeg'])?'image/jpeg':($lext==='png'?'image/png':'image/webp');
+            $lb64=base64_encode(file_get_contents($lf));
+        ?>
+        <img src="data:<?= $lmime ?>;base64,<?= $lb64 ?>" style="max-width:130px;max-height:130px;object-fit:contain;flex-shrink:0;background:transparent;border:none;mix-blend-mode:screen">
+        <?php else: ?><div class="agent-ph"></div><?php endif; ?>
         <div>
             <div class="agent-name"><?= htmlspecialchars($agent_name) ?></div>
             <div class="agent-title"><?= htmlspecialchars($agent_title) ?></div>

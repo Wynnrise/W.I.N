@@ -111,6 +111,46 @@ $first_name = explode(' ', trim($dev['full_name']))[0];
 
 // Active tab
 $active_tab = $_GET['tab'] ?? 'overview';
+
+// ── Handle logo upload ────────────────────────────────────────────────────
+$logo_message = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_profile'])) {
+    $logo_path = $dev['report_logo_path'] ?? null;
+
+    // Handle logo upload
+    if (!empty($_FILES['report_logo']['name']) && $_FILES['report_logo']['error'] === UPLOAD_ERR_OK) {
+        $file = $_FILES['report_logo'];
+        $ext  = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+        if (in_array($ext, ['jpg','jpeg','png','webp'])) {
+            if ($file['size'] <= 2 * 1024 * 1024) {
+                $logo_dir = __DIR__ . '/uploads/logos/';
+                if (!is_dir($logo_dir)) mkdir($logo_dir, 0755, true);
+                $logo_file = 'dev_' . $dev_id . '_logo.' . $ext;
+                if (move_uploaded_file($file['tmp_name'], $logo_dir . $logo_file)) {
+                    $logo_path = 'uploads/logos/' . $logo_file;
+                    $logo_message = '✅ Logo uploaded successfully.';
+                }
+            } else {
+                $logo_message = '❌ File too large — max 2MB.';
+            }
+        } else {
+            $logo_message = '❌ Only JPG, PNG, or WEBP allowed.';
+        }
+    }
+
+    // Save profile fields
+    try {
+        $bio   = trim($_POST['report_bio']   ?? '');
+        $title = trim($_POST['report_title'] ?? '');
+        $pdo->prepare("UPDATE developers SET report_logo_path=?, report_bio=?, report_title=? WHERE id=?")
+            ->execute([$logo_path, $bio, $title, $dev_id]);
+        if (!$logo_message) $logo_message = '✅ Profile saved.';
+        // Refresh dev data
+        $dev_r = $pdo->prepare("SELECT * FROM developers WHERE id=?"); $dev_r->execute([$dev_id]); $dev = $dev_r->fetch(PDO::FETCH_ASSOC) ?: $dev;
+    } catch (Exception $e) {
+        $logo_message = '❌ Error: ' . $e->getMessage();
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -362,7 +402,7 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--cream);
     <?php endif; ?>
 
     <div class="sb-section-label">Account</div>
-    <a href="developer-profile.php" class="sb-link"><i class="fas fa-address-card"></i>My Profile</a>
+    <a href="?tab=profile" class="sb-link <?= $active_tab==='profile'?'active':'' ?>"><i class="fas fa-user-circle"></i>My Profile & Logo</a>
     <a href="change-password.php" class="sb-link"><i class="fas fa-key"></i>Change Password</a>
     <div class="sb-spacer"></div>
     <a href="dev-logout.php" class="sb-link"><i class="fas fa-power-off"></i>Log Out</a>
@@ -717,6 +757,110 @@ elseif ($active_tab === 'reports'): ?>
     </tbody>
 </table>
 <?php endif; ?>
+
+<?php // ─────────────────────────────────────────────────────
+      // TAB: PROFILE & LOGO
+      // ─────────────────────────────────────────────────────
+elseif ($active_tab === 'profile'): ?>
+
+<div class="page-header">
+    <div>
+        <div class="page-title">My Profile & Report Logo</div>
+        <div class="page-sub">Your logo and bio appear on every PDF report you generate</div>
+    </div>
+</div>
+
+<?php if ($logo_message): ?>
+<div style="background:<?= str_starts_with($logo_message,'✅')?'#f0fdf4':'#fef2f2' ?>;border:1px solid <?= str_starts_with($logo_message,'✅')?'#bbf7d0':'#fecaca' ?>;border-radius:8px;padding:12px 16px;margin-bottom:20px;font-size:13px;color:<?= str_starts_with($logo_message,'✅')?'#166534':'#991b1b' ?>;">
+    <?= htmlspecialchars($logo_message) ?>
+</div>
+<?php endif; ?>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;max-width:800px;">
+
+    <!-- Current logo preview -->
+    <div style="background:#fff;border-radius:10px;padding:24px;border:1px solid var(--bdr);">
+        <div style="font-size:13px;font-weight:700;color:var(--navy);margin-bottom:14px;">Current Report Logo</div>
+        <?php
+        $logo = $dev['report_logo_path'] ?? null;
+        $logo_full = $logo ? __DIR__ . '/' . ltrim($logo, '/') : null;
+        if ($logo_full && file_exists($logo_full)):
+            $ext = strtolower(pathinfo($logo_full, PATHINFO_EXTENSION));
+            $mime = in_array($ext,['jpg','jpeg']) ? 'image/jpeg' : ($ext==='png'?'image/png':'image/webp');
+            $b64 = base64_encode(file_get_contents($logo_full));
+        ?>
+        <img src="data:<?= $mime ?>;base64,<?= $b64 ?>"
+             style="width:100%;max-height:160px;object-fit:contain;border:1px solid #e2e8f0;border-radius:6px;background:#f9f9f9;padding:8px;">
+        <div style="font-size:11px;color:#aaa;margin-top:8px;">This logo appears on your PDF reports</div>
+        <?php else: ?>
+        <div style="width:100%;height:120px;background:#f1f5f9;border:2px dashed #cbd5e1;border-radius:6px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;color:#94a3b8;">
+            <i class="fas fa-image" style="font-size:28px;"></i>
+            <div style="font-size:12px;">No logo uploaded yet</div>
+        </div>
+        <?php endif; ?>
+    </div>
+
+    <!-- Upload form -->
+    <div style="background:#fff;border-radius:10px;padding:24px;border:1px solid var(--bdr);">
+        <div style="font-size:13px;font-weight:700;color:var(--navy);margin-bottom:14px;">Update Profile</div>
+        <form method="POST" enctype="multipart/form-data">
+            <input type="hidden" name="save_profile" value="1">
+
+            <div style="margin-bottom:14px;">
+                <label style="font-size:12px;font-weight:600;color:#555;display:block;margin-bottom:5px;">Report Logo <span style="color:#aaa;font-weight:400;">(JPG/PNG/WEBP, max 2MB)</span></label>
+                <input type="file" name="report_logo" accept=".jpg,.jpeg,.png,.webp"
+                       style="font-size:12px;width:100%;padding:6px;border:1px solid #e2e8f0;border-radius:6px;">
+                <div style="font-size:11px;color:#aaa;margin-top:4px;">Recommended: 300×150px, transparent background PNG</div>
+            </div>
+
+            <div style="margin-bottom:14px;">
+                <label style="font-size:12px;font-weight:600;color:#555;display:block;margin-bottom:5px;">Report Title <span style="color:#aaa;font-weight:400;">(shown under your name)</span></label>
+                <input type="text" name="report_title" value="<?= htmlspecialchars($dev['report_title'] ?? '') ?>"
+                       placeholder="e.g. Realtor® · ABC Realty"
+                       style="width:100%;padding:8px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;">
+            </div>
+
+            <div style="margin-bottom:18px;">
+                <label style="font-size:12px;font-weight:600;color:#555;display:block;margin-bottom:5px;">Bio <span style="color:#aaa;font-weight:400;">(shown on report back cover)</span></label>
+                <textarea name="report_bio" rows="3"
+                          placeholder="e.g. Specializing in missing middle development in Metro Vancouver."
+                          style="width:100%;padding:8px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;resize:vertical;"><?= htmlspecialchars($dev['report_bio'] ?? '') ?></textarea>
+            </div>
+
+            <button type="submit" style="background:var(--navy);color:#fff;border:none;padding:10px 24px;border-radius:8px;font-weight:700;font-size:13px;cursor:pointer;width:100%;">
+                <i class="fas fa-save" style="margin-right:6px;"></i>Save Profile
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- Account info read-only -->
+<div style="background:#fff;border-radius:10px;padding:24px;border:1px solid var(--bdr);margin-top:20px;max-width:800px;">
+    <div style="font-size:13px;font-weight:700;color:var(--navy);margin-bottom:14px;">Account Information</div>
+    <div class="profile-card">
+        <div class="profile-row"><span class="key">Name</span><span class="val"><?= htmlspecialchars($dev['full_name']) ?></span></div>
+        <div class="profile-row"><span class="key">Email</span><span class="val"><?= htmlspecialchars($dev['email']) ?></span></div>
+        <div class="profile-row"><span class="key">Company</span><span class="val"><?= htmlspecialchars($dev['company_name'] ?? '—') ?></span></div>
+        <div class="profile-row"><span class="key">Phone</span><span class="val"><?= htmlspecialchars($dev['phone'] ?? '—') ?></span></div>
+        <div class="profile-row"><span class="key">Role</span><span class="val"><?= $rc['label'] ?></span></div>
+        <div class="profile-row"><span class="key">Member since</span><span class="val"><?= date('F j, Y', strtotime($dev['created_at'])) ?></span></div>
+        <?php
+        $reports_today = 0;
+        try {
+            $r = $pdo->prepare("SELECT COUNT(*) FROM pdf_log WHERE developer_id=? AND DATE(generated_at)=CURDATE()");
+            $r->execute([$dev_id]);
+            $reports_today = (int)$r->fetchColumn();
+        } catch(Exception $e) {}
+        $report_limit = (int)($dev['daily_report_limit'] ?? 5);
+        $bonus = (int)($dev['bonus_reports'] ?? 0);
+        $effective_limit = $report_limit + $bonus;
+        ?>
+        <div class="profile-row"><span class="key">Reports today</span><span class="val"><?= $reports_today ?> / <?= $effective_limit ?> daily limit<?= $bonus > 0 ? " (+{$bonus} bonus)" : '' ?></span></div>
+    </div>
+    <div style="margin-top:12px;">
+        <a href="change-password.php" style="font-size:12px;color:var(--navy);text-decoration:none;font-weight:600;"><i class="fas fa-key" style="margin-right:4px;"></i>Change Password</a>
+    </div>
+</div>
 
 <?php endif; // end tab switch ?>
 
