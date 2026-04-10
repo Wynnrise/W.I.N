@@ -512,6 +512,8 @@ body{background:#f0f4f8;font-family:'Segoe UI',system-ui,sans-serif;margin:0;pad
         <i class="fas fa-users"></i> Population &amp; Census</a>
     <a href="plex-data.php?tab=history" class="<?= $active_tab==='history'?'active':'' ?>">
         <i class="fas fa-history"></i> Upload History</a>
+    <a href="plex-data.php?tab=financing" class="<?= $active_tab==='financing'?'active':'' ?>" style="<?= $active_tab==='financing'?'border-bottom-color:#c9a84c;color:#c9a84c':'' ?>">
+        <i class="fas fa-university"></i> CMHC MLI Assumptions</a>
 </div>
 
 <div class="content">
@@ -1174,6 +1176,165 @@ elseif ($active_tab === 'history'): ?>
         </tbody>
     </table></div>
     <?php endif; ?>
+</div>
+
+<?php elseif ($active_tab === 'financing'):
+
+// ── Create table if not exists ────────────────────────────────────────────
+try {
+    $pdo->exec("CREATE TABLE IF NOT EXISTS financing_assumptions (
+        id                   INT AUTO_INCREMENT PRIMARY KEY,
+        assumption_name      VARCHAR(100) NOT NULL DEFAULT 'CMHC MLI Select',
+        ltc_pct              DECIMAL(5,2) NOT NULL DEFAULT 75.00,
+        interest_rate_pct    DECIMAL(5,2) NOT NULL DEFAULT 5.25,
+        amortization_years   INT          NOT NULL DEFAULT 40,
+        insurance_prem_pct   DECIMAL(5,2) NOT NULL DEFAULT 4.00,
+        market_cap_rate_pct  DECIMAL(5,2) NOT NULL DEFAULT 4.50,
+        vacancy_rate_pct     DECIMAL(5,2) NOT NULL DEFAULT 5.00,
+        mgmt_fee_pct         DECIMAL(5,2) NOT NULL DEFAULT 8.00,
+        insurance_per_unit   DECIMAL(8,2) NOT NULL DEFAULT 150.00,
+        maintenance_per_unit DECIMAL(8,2) NOT NULL DEFAULT 900.00,
+        property_tax_rate    DECIMAL(6,4) NOT NULL DEFAULT 0.0030,
+        notes                TEXT,
+        updated_at           DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        updated_by           VARCHAR(100) DEFAULT NULL
+    )");
+    $cnt = (int)$pdo->query("SELECT COUNT(*) FROM financing_assumptions")->fetchColumn();
+    if ($cnt === 0) {
+        $pdo->exec("INSERT INTO financing_assumptions
+            (assumption_name,ltc_pct,interest_rate_pct,amortization_years,
+             insurance_prem_pct,market_cap_rate_pct,vacancy_rate_pct,
+             mgmt_fee_pct,insurance_per_unit,maintenance_per_unit,
+             property_tax_rate,notes,updated_by)
+            VALUES('CMHC MLI Select',75.00,5.25,40,4.00,4.50,5.00,8.00,150.00,900.00,0.0030,
+            'CMHC MLI Select — purpose-built rental financing. Verify current rates with mortgage broker.',
+            'Admin')");
+    }
+} catch(PDOException $e) {}
+
+// ── Handle POST save ──────────────────────────────────────────────────────
+$fa_msg = ''; $fa_type = '';
+if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['save_financing'])) {
+    try {
+        $pdo->prepare("UPDATE financing_assumptions SET
+            assumption_name=?, ltc_pct=?, interest_rate_pct=?, amortization_years=?,
+            insurance_prem_pct=?, market_cap_rate_pct=?, vacancy_rate_pct=?,
+            mgmt_fee_pct=?, insurance_per_unit=?, maintenance_per_unit=?,
+            property_tax_rate=?, notes=?, updated_at=NOW(), updated_by='Admin'
+            WHERE id=1")->execute([
+            trim($_POST['assumption_name'] ?? 'CMHC MLI Select'),
+            (float)($_POST['ltc_pct'] ?? 75),
+            (float)($_POST['interest_rate_pct'] ?? 5.25),
+            (int)($_POST['amortization_years'] ?? 40),
+            (float)($_POST['insurance_prem_pct'] ?? 4.00),
+            (float)($_POST['market_cap_rate_pct'] ?? 4.50),
+            (float)($_POST['vacancy_rate_pct'] ?? 5.00),
+            (float)($_POST['mgmt_fee_pct'] ?? 8.00),
+            (float)($_POST['insurance_per_unit'] ?? 150.00),
+            (float)($_POST['maintenance_per_unit'] ?? 900.00),
+            (float)($_POST['property_tax_rate'] ?? 0.0030),
+            trim($_POST['notes'] ?? ''),
+        ]);
+        $fa_msg = '✅ CMHC MLI assumptions saved. All new rental reports will use these values immediately.';
+        $fa_type = 'ok';
+    } catch(PDOException $e) {
+        $fa_msg = '❌ Save failed: '.htmlspecialchars($e->getMessage());
+        $fa_type = 'err';
+    }
+}
+
+$fa = $pdo->query("SELECT * FROM financing_assumptions ORDER BY updated_at DESC LIMIT 1")->fetch();
+?>
+
+<div class="card">
+    <h3><i class="fas fa-university me-2" style="color:var(--gold)"></i>CMHC MLI Select — Financing Assumptions</h3>
+    <p class="sub">These values drive every <strong>Rental / Hold</strong> report. Update whenever CMHC changes MLI Select criteria, rates, or insurance premiums. Changes take effect immediately on the next report generated.</p>
+
+    <?php if ($fa_msg): ?>
+    <div class="result-box <?= $fa_type ?>" style="margin-bottom:20px"><?= $fa_msg ?></div>
+    <?php endif; ?>
+
+    <form method="POST" action="plex-data.php?tab=financing">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:20px">
+
+        <div>
+            <div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#888;margin-bottom:16px;padding-bottom:8px;border-bottom:2px solid #002446">Financing Structure</div>
+
+            <div class="mb-3">
+                <label class="form-label">Assumption Name</label>
+                <input type="text" name="assumption_name" class="form-control" value="<?= htmlspecialchars($fa['assumption_name'] ?? 'CMHC MLI Select') ?>">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Loan-to-Cost (LTC) % <small style="color:#aaa">— MLI Select = 75%</small></label>
+                <input type="number" name="ltc_pct" class="form-control" step="0.25" min="50" max="85" value="<?= $fa['ltc_pct'] ?? 75 ?>">
+                <div class="form-text">Equity required = 100% − LTC. At 75% → 25% equity down.</div>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Interest Rate % <small style="color:#aaa">— annual insured rate</small></label>
+                <input type="number" name="interest_rate_pct" class="form-control" step="0.05" min="2" max="12" value="<?= $fa['interest_rate_pct'] ?? 5.25 ?>">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Amortization (years) <small style="color:#aaa">— MLI Select allows 40</small></label>
+                <input type="number" name="amortization_years" class="form-control" step="5" min="20" max="40" value="<?= $fa['amortization_years'] ?? 40 ?>">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">CMHC Insurance Premium % <small style="color:#aaa">— of loan amount</small></label>
+                <input type="number" name="insurance_prem_pct" class="form-control" step="0.25" min="0" max="6" value="<?= $fa['insurance_prem_pct'] ?? 4.00 ?>">
+                <div class="form-text">4.00% at 75% LTC. Added to loan principal.</div>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Market Cap Rate % <small style="color:#aaa">— for asset sale valuation</small></label>
+                <input type="number" name="market_cap_rate_pct" class="form-control" step="0.25" min="2" max="8" value="<?= $fa['market_cap_rate_pct'] ?? 4.50 ?>">
+                <div class="form-text">Asset sale value = NOI ÷ cap rate.</div>
+            </div>
+        </div>
+
+        <div>
+            <div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#888;margin-bottom:16px;padding-bottom:8px;border-bottom:2px solid var(--gold)">Operating Assumptions</div>
+
+            <div class="mb-3">
+                <label class="form-label">Vacancy Rate % <small style="color:#aaa">— lender standard = 5%</small></label>
+                <input type="number" name="vacancy_rate_pct" class="form-control" step="0.5" min="0" max="15" value="<?= $fa['vacancy_rate_pct'] ?? 5.00 ?>">
+                <div class="form-text">Vancouver purpose-built actual ~1–2%. 5% is conservative.</div>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Property Management Fee % <small style="color:#aaa">— of EGI</small></label>
+                <input type="number" name="mgmt_fee_pct" class="form-control" step="0.5" min="0" max="15" value="<?= $fa['mgmt_fee_pct'] ?? 8.00 ?>">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Building Insurance ($/unit/year)</label>
+                <input type="number" name="insurance_per_unit" class="form-control" step="25" min="0" max="2000" value="<?= $fa['insurance_per_unit'] ?? 150.00 ?>">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Maintenance & Repairs ($/unit/year)</label>
+                <input type="number" name="maintenance_per_unit" class="form-control" step="50" min="0" max="5000" value="<?= $fa['maintenance_per_unit'] ?? 900.00 ?>">
+                <div class="form-text">$900/yr = $75/mo per unit — standard lender allowance.</div>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Property Tax Rate <small style="color:#aaa">— decimal (0.0030 = 0.30%)</small></label>
+                <input type="number" name="property_tax_rate" class="form-control" step="0.0001" min="0.001" max="0.02" value="<?= $fa['property_tax_rate'] ?? 0.0030 ?>">
+                <div class="form-text">Vancouver Class 1 Residential ~0.30% of assessed value.</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label">Notes / Broker Reference</label>
+        <textarea name="notes" class="form-control" rows="2"><?= htmlspecialchars($fa['notes'] ?? '') ?></textarea>
+    </div>
+
+    <?php if (!empty($fa['updated_at'])): ?>
+    <div style="font-size:11px;color:#aaa;margin-bottom:16px">Last saved: <?= date('F j, Y g:i a', strtotime($fa['updated_at'])) ?> by <?= htmlspecialchars($fa['updated_by'] ?? 'Admin') ?></div>
+    <?php endif; ?>
+
+    <div style="background:#f9f6f0;border-left:3px solid var(--gold);padding:14px 18px;margin-bottom:20px;font-size:12px;color:#374151;line-height:1.7">
+        <strong>How these values appear in the Rental Report:</strong> Loan = total cost × LTC%. CMHC premium added → insured loan. Monthly payment via standard amortization formula. NOI = EGI − (vacancy + management + insurance + maintenance + property tax). Cash flow = NOI − annual debt service. Asset sale value = NOI ÷ market cap rate.
+    </div>
+
+    <button type="submit" name="save_financing" class="btn-gold" style="max-width:220px">
+        <i class="fas fa-save me-2"></i>Save MLI Assumptions
+    </button>
+    </form>
 </div>
 
 <?php endif; ?>

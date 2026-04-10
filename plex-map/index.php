@@ -877,7 +877,7 @@ function renderPanel(d,tab) {
   const actions=document.getElementById('panel-actions');
   actions.style.display='flex';
   actions.innerHTML=`
-    <button class="w-action-btn w-action-gold" onclick="window.location.href='/generate-report.php?pid=${d.property.pid}'"><i class="fas fa-file-pdf"></i> Generate PDF Report</button>
+    <button class="w-action-btn w-action-gold" onclick="window.open('/generate-report.php?pid=${d.property.pid}&path='+currentPath,'_blank')"><i class="fas fa-file-pdf"></i> Generate PDF Report</button>
     <button class="w-action-btn w-action-primary" onclick="inquireAcquisition('${d.property.pid}','${escHtml(d.property.address)}')"><i class="fas fa-handshake"></i> Inquire for Acquisition</button>
     <button class="w-action-btn w-action-secondary" id="save-lot-btn" onclick="saveLot('${d.property.pid}')"><i class="far fa-heart"></i> Save Lot</button>`;
   updateSaveButton(d.property.pid);
