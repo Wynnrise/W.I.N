@@ -12,6 +12,10 @@
 // ============================================================
 
 session_start();
+
+// Read JSON body early — postJSON sends JSON not $_POST
+$_raw_body = file_get_contents('php://input');
+$_json_body = ($_raw_body && trim($_raw_body)) ? (json_decode($_raw_body, true) ?: []) : [];
 if (empty($_SESSION['admin_logged_in'])) {
     http_response_code(401);
     echo json_encode(['success'=>false,'error'=>'Unauthorized']);
@@ -31,7 +35,7 @@ try {
     echo json_encode(['success'=>false,'error'=>'DB: '.$e->getMessage()]); exit;
 }
 
-$input  = json_decode(file_get_contents('php://input'), true);
+$input  = $_json_body;
 if (!$input) $input = $_POST;
 
 $nb_slug     = trim($input['neighbourhood_slug'] ?? '');

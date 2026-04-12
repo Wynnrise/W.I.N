@@ -1,6 +1,6 @@
 <?php
 // Parse JSON body and merge into $_POST so existing code works unchanged
-$_json_body = json_decode(file_get_contents("php://input"), true);
+$_json_body = $_json_body;
 if (is_array($_json_body)) {
     foreach ($_json_body as $k => $v) { $_POST[$k] = $v; }
 }
@@ -37,6 +37,10 @@ if (is_array($_json_body)) {
 // ============================================================
 
 session_start();
+
+// Read JSON body early — postJSON sends JSON not $_POST
+$_raw_body = file_get_contents('php://input');
+$_json_body = ($_raw_body && trim($_raw_body)) ? (json_decode($_raw_body, true) ?: []) : [];
 if (empty($_SESSION['admin_logged_in'])) {
     http_response_code(401);
     echo json_encode(['success'=>false,'error'=>'Unauthorized']);

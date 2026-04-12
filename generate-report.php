@@ -139,9 +139,16 @@ $buildable_sqft = round($buildable_sqm * 10.7639);
 $strata_sqft    = round($lot_area_sqm * 0.70 * 10.7639);
 $rental_sqft    = round($lot_area_sqm * 1.00 * 10.7639);
 
+// Rental unit count — floor of 2 for below-minimum lots
+$rental_units = max($max_units, 2);
+
 // ── Market data ───────────────────────────────────────────────────────────────
-$ms = $pdo->prepare("SELECT avg_sold_psf_duplex, avg_rent_1br, avg_rent_2br, avg_rent_3br, sales_count_duplex AS sales_count, data_month FROM monthly_market_stats WHERE neighbourhood_slug=? AND is_active=1 ORDER BY data_month DESC LIMIT 1");
+// Sold data
+$ms = $pdo->prepare("SELECT avg_sold_psf_duplex, sales_count_duplex AS sales_count, data_month FROM monthly_market_stats WHERE neighbourhood_slug=? AND is_active=1 AND csv_type IN('duplex','detached') ORDER BY data_month DESC LIMIT 1");
 $ms->execute([$nb_slug]); $market = $ms->fetch();
+// Rental data
+$mr = $pdo->prepare("SELECT avg_rent_1br, avg_rent_2br, avg_rent_3br FROM monthly_market_stats WHERE neighbourhood_slug=? AND is_active=1 AND csv_type IN('rental','rebgv_rental') AND (avg_rent_1br>0 OR avg_rent_2br>0 OR avg_rent_3br>0) ORDER BY data_month DESC LIMIT 1");
+$mr->execute([$nb_slug]); $market_rent=$mr->fetch();
 $metro = $pdo->query("SELECT AVG(avg_sold_psf_duplex) as p FROM monthly_market_stats WHERE is_active=1 AND data_month>=DATE_SUB(CURDATE(),INTERVAL 3 MONTH)")->fetch();
 $current_psf = (float)($market['avg_sold_psf_duplex'] ?? $metro['p'] ?? 985);
 $comp_count  = (int)($market['sales_count'] ?? 0);
@@ -175,9 +182,12 @@ if (count($comps)<3) {
 }
 
 // ── Build costs ───────────────────────────────────────────────────────────────
-$bcs=$pdo->prepare("SELECT cost_standard_low,cost_standard_high FROM construction_costs WHERE neighbourhood_slug=? ORDER BY updated_at DESC LIMIT 1");
+$bcs=$pdo->prepare("SELECT cost_standard_low,cost_standard_high,dcl_city,dcl_utilities,metro_dcc_per_unit FROM construction_costs WHERE neighbourhood_slug=? ORDER BY updated_at DESC LIMIT 1");
 $bcs->execute([$nb_slug]); $bc=$bcs->fetch();
-$build_psf = $bc ? (((float)$bc['cost_standard_low']+(float)$bc['cost_standard_high'])/2) : 420;
+$build_psf      = $bc ? (((float)$bc['cost_standard_low']+(float)$bc['cost_standard_high'])/2) : 420;
+$dcl_city_rate  = ($bc && (float)$bc['dcl_city']>0)        ? (float)$bc['dcl_city']        : 4.63;
+$dcl_util_rate  = ($bc && (float)$bc['dcl_utilities']>0)   ? (float)$bc['dcl_utilities']   : 2.90;
+$metro_dcc_unit = ($bc && (int)$bc['metro_dcc_per_unit']>0) ? (int)$bc['metro_dcc_per_unit'] : 29243;
 
 // ── CMHC MLI Select financing assumptions ────────────────────────────────────
 $fa = null;
@@ -209,20 +219,22 @@ $buildable_sqm  = $lot_area_sqm * ($is_rental_path ? $fsr_rental : $fsr_strata);
 
 // ── Project costs — STRATA ────────────────────────────────────────────────────
 $s_hard_build  = $strata_buildable_sqft * $build_psf;
-$s_dcl_city    = $strata_buildable_sqft * 18.45;
-$s_dcl_util    = $strata_buildable_sqft * 2.95;
+$s_dcl_city    = $strata_buildable_sqft * $dcl_city_rate;
+$s_dcl_util    = $strata_buildable_sqft * $dcl_util_rate;
+$s_metro_dcc   = $metro_dcc_unit * max($max_units, 1);
 $s_permit_fees = ($s_hard_build / 1000) * 13.70;
 $s_peat_cost   = $peat_zone ? 150000 : 0;
-$s_total_cost  = $assessed_land + $s_hard_build + $s_dcl_city + $s_dcl_util + $s_permit_fees + $s_peat_cost;
+$s_total_cost  = $assessed_land + $s_hard_build + $s_dcl_city + $s_dcl_util + $s_metro_dcc + $s_permit_fees + $s_peat_cost;
 
 // ── Project costs — RENTAL ────────────────────────────────────────────────────
 $r_density_bonus = ($lot_area_sqm * 0.30 * 10.7639) * 40;
 $r_hard_build    = $rental_buildable_sqft * $build_psf;
-$r_dcl_city      = $rental_buildable_sqft * 18.45;
-$r_dcl_util      = $rental_buildable_sqft * 2.95;
+$r_dcl_city      = $rental_buildable_sqft * $dcl_city_rate;
+$r_dcl_util      = $rental_buildable_sqft * $dcl_util_rate;
+$r_metro_dcc     = $metro_dcc_unit * $rental_units;
 $r_permit_fees   = ($r_hard_build / 1000) * 13.70;
 $r_peat_cost     = $peat_zone ? 150000 : 0;
-$r_total_cost    = $assessed_land + $r_hard_build + $r_density_bonus + $r_dcl_city + $r_dcl_util + $r_permit_fees + $r_peat_cost;
+$r_total_cost    = $assessed_land + $r_hard_build + $r_density_bonus + $r_dcl_city + $r_dcl_util + $r_metro_dcc + $r_permit_fees + $r_peat_cost;
 
 // Active path total cost
 $total_cost    = $is_rental_path ? $r_total_cost : $s_total_cost;
@@ -231,6 +243,7 @@ $density_bonus = $is_rental_path ? $r_density_bonus : 0;
 $dcl_city      = $is_rental_path ? $r_dcl_city : $s_dcl_city;
 $dcl_util      = $is_rental_path ? $r_dcl_util : $s_dcl_util;
 $permit_fees   = $is_rental_path ? $r_permit_fees : $s_permit_fees;
+$metro_dcc     = $is_rental_path ? $r_metro_dcc : $s_metro_dcc;
 $peat_cost     = $peat_zone ? 150000 : 0;
 
 // ── STRATA exit calculations ──────────────────────────────────────────────────
@@ -251,22 +264,22 @@ foreach($mb as $b){
 }
 
 // ── RENTAL income calculations ────────────────────────────────────────────────
-$cmhcs=$pdo->prepare("SELECT benchmark_1br, cmhc_rent_2br AS benchmark_2br, benchmark_3br FROM cmhc_benchmarks WHERE neighbourhood_slug=? ORDER BY year DESC LIMIT 1");
+$cmhcs=$pdo->prepare("SELECT benchmark_1br, benchmark_2br, benchmark_3br FROM cmhc_benchmarks WHERE neighbourhood_slug=? ORDER BY year DESC LIMIT 1");
 $cmhcs->execute([$nb_slug]); $cmhc_bench=$cmhcs->fetch();
-$r1=(int)($market['avg_rent_1br']??$cmhc_bench['benchmark_1br']??2100);
-$r2=(int)($market['avg_rent_2br']??$cmhc_bench['benchmark_2br']??2750);
-$r3=(int)($market['avg_rent_3br']??$cmhc_bench['benchmark_3br']??3200);
+$r1=(int)($market_rent['avg_rent_1br']??$cmhc_bench['benchmark_1br']??2100);
+$r2=(int)($market_rent['avg_rent_2br']??$cmhc_bench['benchmark_2br']??2750);
+$r3=(int)($market_rent['avg_rent_3br']??$cmhc_bench['benchmark_3br']??3200);
 $c1=(int)($cmhc_bench['benchmark_1br']??1875);
 $c2=(int)($cmhc_bench['benchmark_2br']??2400);
 $c3=(int)($cmhc_bench['benchmark_3br']??2900);
 
 $rental_rows=[
-    ['t'=>'1BR','curr'=>$r1,'cmhc'=>$c1,'units'=>($max_units>=6?2:1)],
-    ['t'=>'2BR','curr'=>$r2,'cmhc'=>$c2,'units'=>($max_units>=6?3:($max_units>=4?2:1))],
+    ['t'=>'1BR','curr'=>$r1,'cmhc'=>$c1,'units'=>($rental_units>=6?2:1)],
+    ['t'=>'2BR','curr'=>$r2,'cmhc'=>$c2,'units'=>($rental_units>=6?3:($rental_units>=4?2:1))],
     ['t'=>'3BR','curr'=>$r3,'cmhc'=>$c3,'units'=>1],
 ];
 
-$r_gross_monthly = $max_units>=6 ? (2*$r1+3*$r2+$r3) : ($max_units===4 ? ($r1+2*$r2+$r3) : ($r1+$r2));
+$r_gross_monthly = $rental_units>=6 ? (2*$r1+3*$r2+$r3) : ($rental_units>=4 ? ($r1+2*$r2+$r3) : ($r1+$r2));
 $r_gross_annual  = $r_gross_monthly * 12;
 
 // EGI after vacancy
@@ -274,8 +287,8 @@ $r_egi = $r_gross_annual * (1 - $fa_vacancy);
 
 // Operating expenses (detailed)
 $r_prop_tax  = $r_total_cost * $fa_tax_rate;        // property tax on post-completion assessed value
-$r_insurance = $fa_ins_unit  * $max_units;           // building insurance
-$r_maint     = $fa_maint_unit * $max_units;          // maintenance & repairs
+$r_insurance = $fa_ins_unit  * $rental_units;        // building insurance
+$r_maint     = $fa_maint_unit * $rental_units;       // maintenance & repairs
 $r_mgmt_fee  = $r_egi * $fa_mgmt;                   // property management
 $r_total_opex = $r_prop_tax + $r_insurance + $r_maint + $r_mgmt_fee;
 
@@ -1336,9 +1349,10 @@ table.dt tr:last-child td{border-bottom:none}
     <div class="pf-section-title">Project Costs</div>
     <div class="pf-line"><span class="pf-label">Land — BC Assessment <?= $assessment_year ?></span><span class="pf-val"><?= money($assessed_land) ?></span></div>
     <div class="pf-line indent"><span class="pf-label">Hard build (<?= number_format($strata_buildable_sqft) ?> sqft × <?= money($build_psf) ?>/sqft)</span><span class="pf-val"><?= money($s_hard_build) ?></span></div>
-    <div class="pf-line indent"><span class="pf-label">City-wide DCL ($18.45/sqft)</span><span class="pf-val"><?= money($s_dcl_city) ?></span></div>
-    <div class="pf-line indent"><span class="pf-label">Utilities DCL ($2.95/sqft)</span><span class="pf-val"><?= money($s_dcl_util) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">City-wide DCL ($<?= number_format($dcl_city_rate,2) ?>/sqft)</span><span class="pf-val"><?= money($s_dcl_city) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">Utilities DCL ($<?= number_format($dcl_util_rate,2) ?>/sqft)</span><span class="pf-val"><?= money($s_dcl_util) ?></span></div>
     <div class="pf-line indent"><span class="pf-label">Permit fees ($13.70/$1,000)</span><span class="pf-val"><?= money($s_permit_fees) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">Metro DCC ($<?= number_format($metro_dcc_unit) ?>/unit × <?= max($max_units,1) ?> units)</span><span class="pf-val"><?= money($s_metro_dcc) ?></span></div>
     <?php if($peat_zone): ?><div class="pf-line indent"><span class="pf-label" style="color:#b45309">Peat zone contingency</span><span class="pf-val">$150,000</span></div><?php endif; ?>
     <div class="pf-total-bar"><span class="pf-total-label">Total Project Cost</span><span class="pf-total-val"><?= money($s_total_cost) ?></span></div>
 
@@ -1490,9 +1504,10 @@ table.dt tr:last-child td{border-bottom:none}
     <div class="pf-line"><span class="pf-label">Land — BC Assessment <?= $assessment_year ?></span><span class="pf-val"><?= money($assessed_land) ?></span></div>
     <div class="pf-line indent"><span class="pf-label">Hard build (<?= number_format($rental_buildable_sqft) ?> sqft × <?= money($build_psf) ?>/sqft)</span><span class="pf-val"><?= money($r_hard_build) ?></span></div>
     <div class="pf-line indent"><span class="pf-label">Density bonus (bonus FSR × $40/sqft)</span><span class="pf-val"><?= money($r_density_bonus) ?></span></div>
-    <div class="pf-line indent"><span class="pf-label">City-wide DCL ($18.45/sqft)</span><span class="pf-val"><?= money($r_dcl_city) ?></span></div>
-    <div class="pf-line indent"><span class="pf-label">Utilities DCL ($2.95/sqft)</span><span class="pf-val"><?= money($r_dcl_util) ?></span></div>
-    <div class="pf-line indent"><span class="pf-label">Permit fees</span><span class="pf-val"><?= money($r_permit_fees) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">City-wide DCL ($<?= number_format($dcl_city_rate,2) ?>/sqft)</span><span class="pf-val"><?= money($r_dcl_city) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">Utilities DCL ($<?= number_format($dcl_util_rate,2) ?>/sqft)</span><span class="pf-val"><?= money($r_dcl_util) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">Permit fees ($13.70/$1,000)</span><span class="pf-val"><?= money($r_permit_fees) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">Metro DCC ($<?= number_format($metro_dcc_unit) ?>/unit × <?= $rental_units ?> units)</span><span class="pf-val"><?= money($r_metro_dcc) ?></span></div>
     <?php if($peat_zone): ?><div class="pf-line indent"><span class="pf-label" style="color:#b45309">Peat zone contingency</span><span class="pf-val">$150,000</span></div><?php endif; ?>
     <div class="pf-total-bar"><span class="pf-total-label">Total Project Cost</span><span class="pf-total-val"><?= money($r_total_cost) ?></span></div>
 </div>

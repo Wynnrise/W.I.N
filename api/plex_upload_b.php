@@ -1,86 +1,65 @@
 <?php
-// api/plex_upload_b.php
-// POST: save rental data from one source (livrent or rebgv)
-// Body: { neighbourhood_slug, data_month, source, rent_1br, rent_2br,
-//         rent_3br, furnished_premium_pct }
+session_start();
 
-session_start([
-    'cookie_lifetime' => 86400,
-    'cookie_secure'   => true,
-    'cookie_httponly' => true,
-    'cookie_domain'   => 'wynston.ca',
-    'cookie_samesite' => 'Lax',
-]);
-
+// Read JSON body early — postJSON sends JSON not $_POST
+$_raw_body = file_get_contents('php://input');
+$_json_body = ($_raw_body && trim($_raw_body)) ? (json_decode($_raw_body, true) ?: []) : [];
 header('Content-Type: application/json');
 header('Cache-Control: no-store');
+if (empty($_SESSION['admin_logged_in'])) { http_response_code(401); echo json_encode(['success'=>false,'error'=>'Not authorised']); exit; }
 
-if (empty($_SESSION['admin_logged_in'])) {
-    http_response_code(401);
-    echo json_encode(['success' => false, 'error' => 'Not authenticated']);
-    exit;
+$pdo = new PDO("mysql:host=localhost;dbname=u990588858_Property;charset=utf8mb4",
+    'u990588858_Multiplex','Concac1979$',[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
+
+$body = $_json_body ?: $_POST;
+
+$slug      = trim($body['neighbourhood_slug'] ?? '');
+$month_raw = trim($body['data_month'] ?? '');
+$r1        = isset($body['avg_rent_1br'])  && $body['avg_rent_1br']  !== '' ? (int)$body['avg_rent_1br']  : null;
+$r2        = isset($body['avg_rent_2br'])  && $body['avg_rent_2br']  !== '' ? (int)$body['avg_rent_2br']  : null;
+$r3        = isset($body['avg_rent_3br'])  && $body['avg_rent_3br']  !== '' ? (int)$body['avg_rent_3br']  : null;
+$prem      = isset($body['furnished_premium_pct']) && $body['furnished_premium_pct'] !== '' ? (float)$body['furnished_premium_pct'] : 20.0;
+$csv_type  = trim($body['csv_type'] ?? 'rental');
+$source    = trim($body['source'] ?? 'liv.rent');
+
+if (!$slug || !$month_raw) {
+    echo json_encode(['success'=>false,'error'=>'Missing neighbourhood or month']); exit;
 }
 
-$host = 'localhost'; $db = 'u990588858_Property';
-$user = 'u990588858_Multiplex'; $pass = 'Concac1979$';
+// Normalise month to YYYY-MM-01
+$month_dt = date('Y-m-01', strtotime($month_raw));
+if (!$month_dt || $month_dt === '1970-01-01') {
+    echo json_encode(['success'=>false,'error'=>'Invalid month: '.$month_raw]); exit;
+}
+
 try {
-    $pdo = new PDO("mysql:host=$host;dbname=$db;charset=utf8mb4", $user, $pass);
-    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-} catch (PDOException $e) {
-    http_response_code(500);
-    echo json_encode(['success' => false, 'error' => 'DB connection failed']);
-    exit;
-}
+    // Deactivate previous rows for this nb+month+type
+    $pdo->prepare("UPDATE monthly_market_stats SET is_active=0
+                   WHERE neighbourhood_slug=? AND data_month=? AND csv_type=?")
+        ->execute([$slug, $month_dt, $csv_type]);
 
-$input  = json_decode(file_get_contents('php://input'), true);
-$slug   = trim($input['neighbourhood_slug'] ?? '');
-$month  = trim($input['data_month']         ?? '');
-$source = trim($input['source']             ?? 'livrent'); // 'livrent' or 'rebgv'
-
-$rent_1br  = $input['rent_1br']              !== '' ? (int)$input['rent_1br']              : null;
-$rent_2br  = $input['rent_2br']              !== '' ? (int)$input['rent_2br']              : null;
-$rent_3br  = $input['rent_3br']              !== '' ? (int)$input['rent_3br']              : null;
-$furn_pct  = $input['furnished_premium_pct'] !== '' ? (float)$input['furnished_premium_pct'] : 20.00;
-
-if (!$slug)  { echo json_encode(['success' => false, 'error' => 'Neighbourhood required']); exit; }
-if (!$month) { echo json_encode(['success' => false, 'error' => 'Month required']); exit; }
-if (!$rent_1br && !$rent_2br && !$rent_3br) {
-    echo json_encode(['success' => false, 'error' => 'Enter at least one rent value']); exit;
-}
-
-// Map source to csv_type
-$csv_type = ($source === 'rebgv') ? 'rental_rebgv' : 'rental_livrent';
-
-$month_dt = strlen($month) === 7 ? $month . '-01' : $month;
-$label    = date('F Y', strtotime($month_dt));
-
-// Versioning: deactivate previous rows for same neighbourhood + month + source
-$pdo->prepare("
-    UPDATE monthly_market_stats
-    SET is_active = 0
-    WHERE neighbourhood_slug = ? AND data_month = ? AND csv_type = ?
-")->execute([$slug, $month_dt, $csv_type]);
-
-// Insert new row
-$pdo->prepare("
-    INSERT INTO monthly_market_stats
+    // Insert or update
+    $pdo->prepare("INSERT INTO monthly_market_stats
         (neighbourhood_slug, data_month, csv_type,
          avg_rent_1br, avg_rent_2br, avg_rent_3br,
          furnished_premium_pct, source, is_active, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NOW())
-")->execute([
-    $slug, $month_dt, $csv_type,
-    $rent_1br, $rent_2br, $rent_3br,
-    $furn_pct,
-    $source === 'rebgv' ? 'REBGV Rental' : 'liv.rent',
-]);
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NOW())
+        ON DUPLICATE KEY UPDATE
+            avg_rent_1br          = VALUES(avg_rent_1br),
+            avg_rent_2br          = VALUES(avg_rent_2br),
+            avg_rent_3br          = VALUES(avg_rent_3br),
+            furnished_premium_pct = VALUES(furnished_premium_pct),
+            source                = VALUES(source),
+            is_active             = 1")
+        ->execute([$slug, $month_dt, $csv_type, $r1, $r2, $r3, $prem, $source]);
 
-$source_label = $source === 'rebgv' ? 'REBGV rental' : 'liv.rent';
-
-echo json_encode([
-    'success'   => true,
-    'message'   => ucfirst($source_label) . " data saved for {$slug} — {$label}",
-    'slug'      => $slug,
-    'month'     => $label,
-    'csv_type'  => $csv_type,
-]);
+    echo json_encode([
+        'success'  => true,
+        'message'  => "✅ {$source} data saved for {$slug} — " . date('F Y', strtotime($month_dt)),
+        'slug'     => $slug,
+        'month'    => $month_dt,
+        'csv_type' => $csv_type,
+    ]);
+} catch(Exception $e) {
+    echo json_encode(['success'=>false,'error'=> $e->getMessage()]);
+}

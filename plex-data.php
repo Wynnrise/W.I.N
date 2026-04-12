@@ -921,7 +921,7 @@ elseif ($active_tab === 'costs'): ?>
     <div class="row g-3 mb-3">
         <div class="col-md-4">
             <label class="form-label">Neighbourhood</label>
-            <select id="cost_slug" class="form-select">
+            <select id="cost_slug" class="form-select" onchange="loadCostData(this.value)">
                 <option value="">— Select neighbourhood —</option>
                 <?php foreach ($cov_neighbourhoods as $nb): ?>
                 <option value="<?= htmlspecialchars($nb['slug']) ?>"><?= htmlspecialchars($nb['name']) ?></option>
@@ -934,8 +934,9 @@ elseif ($active_tab === 'costs'): ?>
         <div class="col-md-2"><label class="form-label">Std High $/sqft</label><input type="number" id="cost_std_hi" class="form-control" placeholder="450"></div>
         <div class="col-md-2"><label class="form-label">Lux Low $/sqft</label><input type="number" id="cost_lux_lo" class="form-control" placeholder="480"></div>
         <div class="col-md-2"><label class="form-label">Lux High $/sqft</label><input type="number" id="cost_lux_hi" class="form-control" placeholder="550"></div>
-        <div class="col-md-2"><label class="form-label">DCL City $/sqft</label><input type="number" step="0.01" id="cost_dcl_city" class="form-control" placeholder="18.45"></div>
-        <div class="col-md-2"><label class="form-label">DCL Utils $/sqft</label><input type="number" step="0.01" id="cost_dcl_util" class="form-control" placeholder="2.95"></div>
+        <div class="col-md-2"><label class="form-label">DCL City $/sqft</label><input type="number" step="0.01" id="cost_dcl_city" class="form-control" placeholder="4.63"></div>
+        <div class="col-md-2"><label class="form-label">DCL Utils $/sqft</label><input type="number" step="0.01" id="cost_dcl_util" class="form-control" placeholder="2.90"></div>
+        <div class="col-md-2"><label class="form-label">Metro DCC $/unit <small class="text-muted" style="font-size:10px;">Jan 2026</small></label><input type="number" id="cost_metro_dcc" class="form-control" placeholder="29243"></div>
     </div>
     <div class="row g-3 mt-0">
         <div class="col-md-3"><label class="form-label">Peat Contingency $</label>
@@ -953,7 +954,7 @@ elseif ($active_tab === 'costs'): ?>
 <div class="card">
     <h3>Saved Cost Overrides</h3>
     <div style="overflow-x:auto;"><table class="preview-table">
-        <thead><tr><th>Neighbourhood</th><th>Std Low</th><th>Std High</th><th>Lux Low</th><th>Lux High</th><th>DCL City</th><th>DCL Utils</th><th>Peat</th><th>Notes</th></tr></thead>
+        <thead><tr><th>Neighbourhood</th><th>Std Low</th><th>Std High</th><th>Lux Low</th><th>Lux High</th><th>DCL City</th><th>DCL Utils</th><th>Metro DCC/unit</th><th>Peat</th><th>Notes</th></tr></thead>
         <tbody>
         <?php foreach ($cost_rows as $r): ?>
         <tr>
@@ -964,6 +965,7 @@ elseif ($active_tab === 'costs'): ?>
             <td>$<?= number_format((float)$r['cost_luxury_high']) ?></td>
             <td>$<?= number_format((float)$r['dcl_city'],2) ?></td>
             <td>$<?= number_format((float)$r['dcl_utilities'],2) ?></td>
+            <td>$<?= number_format((int)($r['metro_dcc_per_unit'] ?? 29243)) ?></td>
             <td>$<?= number_format((float)$r['peat_contingency']) ?></td>
             <td style="font-size:11px;color:#888;"><?= htmlspecialchars($r['notes']??'') ?></td>
         </tr>
@@ -1663,8 +1665,36 @@ function calculateOutlook(){
 }
 
 // ── Build Costs ───────────────────────────────────────────────────────────────
+function loadCostData(slug) {
+    if (!slug) return;
+    postJSON('api/plex_costs.php', {action:'get_costs'}, function(d) {
+        if (!d.success || !d.costs) return;
+        var row = d.costs.find(function(r){ return r.neighbourhood_slug === slug; });
+        if (!row) {
+            // No existing data — clear form to show placeholders
+            ['cost_std_lo','cost_std_hi','cost_lux_lo','cost_lux_hi',
+             'cost_dcl_city','cost_dcl_util','cost_metro_dcc','cost_peat','cost_notes'].forEach(function(id){
+                document.getElementById(id).value = '';
+            });
+            showR('costs-result', 'No existing override for this neighbourhood — defaults will apply on save.', 'ok');
+            return;
+        }
+        // Pre-fill with saved values
+        document.getElementById('cost_std_lo').value   = row.cost_standard_low   || '';
+        document.getElementById('cost_std_hi').value   = row.cost_standard_high  || '';
+        document.getElementById('cost_lux_lo').value   = row.cost_luxury_low     || '';
+        document.getElementById('cost_lux_hi').value   = row.cost_luxury_high    || '';
+        document.getElementById('cost_dcl_city').value = row.dcl_city            || '';
+        document.getElementById('cost_dcl_util').value = row.dcl_utilities       || '';
+        document.getElementById('cost_metro_dcc').value= row.metro_dcc_per_unit  || '';
+        document.getElementById('cost_peat').value     = row.peat_contingency    || '';
+        document.getElementById('cost_notes').value    = row.notes               || '';
+        showR('costs-result', '✏️ Loaded existing values for ' + slug.replace(/-/g,' ') + ' — edit and save.', 'ok');
+    });
+}
+
 function saveCost(){
-    var data={action:'save_cost',neighbourhood_slug:document.getElementById('cost_slug').value,cost_standard_low:document.getElementById('cost_std_lo').value,cost_standard_high:document.getElementById('cost_std_hi').value,cost_luxury_low:document.getElementById('cost_lux_lo').value,cost_luxury_high:document.getElementById('cost_lux_hi').value,dcl_city:document.getElementById('cost_dcl_city').value,dcl_utilities:document.getElementById('cost_dcl_util').value,peat_contingency:document.getElementById('cost_peat').value,notes:document.getElementById('cost_notes').value};
+    var data={action:'save_cost',neighbourhood_slug:document.getElementById('cost_slug').value,cost_standard_low:document.getElementById('cost_std_lo').value,cost_standard_high:document.getElementById('cost_std_hi').value,cost_luxury_low:document.getElementById('cost_lux_lo').value,cost_luxury_high:document.getElementById('cost_lux_hi').value,dcl_city:document.getElementById('cost_dcl_city').value,dcl_utilities:document.getElementById('cost_dcl_util').value,peat_contingency:document.getElementById('cost_peat').value,metro_dcc_per_unit:document.getElementById('cost_metro_dcc').value,notes:document.getElementById('cost_notes').value};
     if(!data.neighbourhood_slug){showR('costs-result','Please select a neighbourhood.','err');return;}
     postJSON('api/plex_costs.php',data,function(d){if(d.success)showR('costs-result','✅ Cost override '+d.action+' for '+d.slug+'. <a href="plex-data.php?tab=costs" style="color:var(--blue);font-weight:700;">Refresh ↗</a>','ok');else showR('costs-result','❌ '+(d.error||'Error'),'err');});
 }
