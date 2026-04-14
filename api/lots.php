@@ -1,6 +1,6 @@
 <?php
 header("Content-Type: application/json");
-header("Cache-Control: public, max-age=3600");
+header("Cache-Control: no-store");
 
 try {
     $pdo = new PDO(
@@ -16,10 +16,12 @@ try {
                lane_access, transit_proximate,
                nearest_ftn_stop_m, profitability_score,
                heritage_category, peat_zone, has_active_permit,
-               floodplain_risk
+               floodplain_risk, easement_present, easement_types
         FROM   plex_properties
         WHERE  lat IS NOT NULL
           AND  lng IS NOT NULL
+          AND  lot_area_sqm <= 3000
+          AND pid NOT IN (SELECT pid FROM excluded_pids)
         ORDER BY pid
     ";
 
@@ -35,18 +37,20 @@ try {
                 'coordinates' => [(float)$lot['lng'], (float)$lot['lat']],
             ],
             'properties' => [
-                'pid'               => $lot['pid'],
-                'address'           => $lot['address'],
-                'lot_width_m'       => (float)$lot['lot_width_m'],
-                'lot_area_sqm'      => (float)$lot['lot_area_sqm'],
-                'lane_access'       => (int)$lot['lane_access'],
-                'transit_proximate' => (int)$lot['transit_proximate'],
-                'nearest_ftn_stop_m'=> (int)$lot['nearest_ftn_stop_m'],
+                'pid'                => $lot['pid'],
+                'address'            => $lot['address'],
+                'lot_width_m'        => (float)$lot['lot_width_m'],
+                'lot_area_sqm'       => (float)$lot['lot_area_sqm'],
+                'lane_access'        => (int)$lot['lane_access'],
+                'transit_proximate'  => (int)$lot['transit_proximate'],
+                'nearest_ftn_stop_m' => (int)$lot['nearest_ftn_stop_m'],
                 'profitability_score'=> (float)$lot['profitability_score'],
-                'heritage_category' => $lot['heritage_category'],
-                'peat_zone'         => (int)$lot['peat_zone'],
+                'heritage_category'  => $lot['heritage_category'],
+                'peat_zone'          => (int)$lot['peat_zone'],
                 'has_active_permit'  => (int)($lot['has_active_permit'] ?? 0),
-                'floodplain_risk'   => $lot['floodplain_risk'] ?? 'none',
+                'floodplain_risk'    => $lot['floodplain_risk'] ?? 'none',
+                'easement_present'   => (int)($lot['easement_present'] ?? 0),
+                'easement_types'     => $lot['easement_types'] ?? '',
             ],
         ];
     }

@@ -294,75 +294,8 @@ function _hpi_fuzzy_match(string $name, array $nb_lkp, array $aliases): ?int {
 }
 
 // ── HPI Bulk POST handler ─────────────────────────────────────────────────────
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['hpi_bulk_confirm'])) {
-    $rows_json = $_POST['hpi_rows_json'] ?? '[]';
-    $rows      = json_decode($rows_json, true) ?: [];
-    $saved = 0;
-    foreach ($rows as $r) {
-        if (empty($r['nb_id']) || empty($r['month_dt'])) continue;
-        $nb_id    = (int)$r['nb_id'];
-        $nb_slug  = $r['nb_slug'] ?? '';
-        $month_dt = $r['month_dt'];
-        $psf_dup  = isset($r['psf_duplex']) && $r['psf_duplex'] !== '' ? (int)$r['psf_duplex'] : null;
+// hpi_bulk_confirm handled by api/hpi_bulk_save.php
 
-        // ── Write to neighbourhood_hpi_history ────────────────────────────
-        $fields = [
-            'avg_price'       => $r['price_duplex'] ?? null,
-            'price_detached'  => $r['price_detached'] ?? null,
-            'price_condo'     => $r['price_condo'] ?? null,
-            'price_townhouse' => $r['price_townhouse'] ?? null,
-            'price_duplex'    => $r['price_duplex'] ?? null,
-            'psf_duplex'      => $psf_dup,
-            'hpi_change_mom'  => null,
-            'hpi_change_yoy'  => $r['yoy_duplex'] ?? null,
-            'dom_detached'    => $r['dom_detached'] ?? null,
-            'dom_duplex'      => $r['dom_duplex'] ?? null,
-            'dom_condo'       => $r['dom_condo'] ?? null,
-            'dom_townhouse'   => $r['dom_townhouse'] ?? null,
-            'sales_detached'  => $r['sales_detached'] ?? null,
-            'sales_duplex'    => $r['sales_duplex'] ?? null,
-            'sales_condo'     => $r['sales_condo'] ?? null,
-            'sales_townhouse' => $r['sales_townhouse'] ?? null,
-        ];
-        $exists = $pdo->prepare("SELECT id FROM neighbourhood_hpi_history WHERE neighbourhood_id=? AND month_year=?");
-        $exists->execute([$nb_id, $month_dt]);
-        if ($exists->fetchColumn()) {
-            $sets = implode(',', array_map(fn($k) => "$k=:$k", array_keys($fields)));
-            $pdo->prepare("UPDATE neighbourhood_hpi_history SET $sets WHERE neighbourhood_id=:nb_id AND month_year=:month")
-                ->execute(array_merge($fields, [':nb_id'=>$nb_id,':month'=>$month_dt]));
-        } else {
-            $cols = implode(',', array_keys($fields));
-            $vals = ':' . implode(',:', array_keys($fields));
-            $pdo->prepare("INSERT INTO neighbourhood_hpi_history (neighbourhood_id,month_year,$cols) VALUES (:nb_id,:month,$vals)")
-                ->execute(array_merge($fields, [':nb_id'=>$nb_id,':month'=>$month_dt]));
-        }
-
-        // ── Write psf_duplex to monthly_market_stats (pro forma exit value) ─
-        // Only write if we have a $/sqft value and a valid COV slug
-        if ($psf_dup && $nb_slug) {
-            // Deactivate previous row for this neighbourhood + month
-            $pdo->prepare("
-                UPDATE monthly_market_stats
-                SET is_active = 0
-                WHERE neighbourhood_slug = ? AND data_month = ? AND csv_type = 'hpi_duplex'
-            ")->execute([$nb_slug, $month_dt]);
-
-            $pdo->prepare("
-                INSERT INTO monthly_market_stats
-                    (neighbourhood_slug, data_month, csv_type, price_per_sqft,
-                     sales_count, is_active, created_at)
-                VALUES (?, ?, 'hpi_duplex', ?, ?, 1, NOW())
-            ")->execute([
-                $nb_slug, $month_dt, $psf_dup,
-                $r['sales_duplex'] ?? null,
-            ]);
-        }
-
-        $saved++;
-    }
-    header("Location: plex-data.php?tab=market-prices&msg=" . urlencode("✅ Upload complete — {$saved} neighbourhoods updated (HPI history + pro forma $/sqft)"));
-    exit;
-}
 
 // ── HPI CSV Parse POST ────────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['hpi_csv'])) {
@@ -1416,7 +1349,7 @@ function uploadHpiCsv(){
     if(!month){showR('hpi-result','Please select a data month.','err');return;}
     var fd=new FormData();fd.append('hpi_csv',file);fd.append('hpi_month',month);
     showR('hpi-result','<i class="fas fa-spinner fa-spin me-2"></i>Parsing CSV…','info');
-    fetch('plex-data.php?tab=market-prices',{method:'POST',body:fd})
+    fetch('plex-data.php',{method:'POST',body:fd})
     .then(function(r){return r.json();})
     .then(function(d){
         if(!d.success){showR('hpi-result',d.error||'Parse error.','err');return;}
@@ -1459,7 +1392,24 @@ function submitHpiBulk(){
     });
     if(!result.length){alert('No matched rows selected.');return;}
     document.getElementById('hpi_rows_json').value=JSON.stringify(result);
-    document.getElementById('hpi_confirm_form').submit();
+    var btn = document.querySelector('#hpi_confirm_form .btn-primary-w');
+    if(btn){btn.disabled=true;btn.textContent='Saving…';}
+    var fd = new FormData(document.getElementById('hpi_confirm_form'));
+    fetch('api/hpi_bulk_save.php',{method:'POST',body:fd})
+        .then(function(r){return r.json();})
+        .then(function(d){
+            if(btn){btn.disabled=false;btn.innerHTML='<i class="fas fa-save"></i>Save All Matched Rows';}
+            if(d.success){
+                alert(d.msg);
+                window.location='plex-data.php?tab=market-prices&msg='+encodeURIComponent(d.msg);
+            } else {
+                alert('Error: '+(d.error||'Save failed'));
+            }
+        })
+        .catch(function(e){
+            if(btn){btn.disabled=false;btn.innerHTML='<i class="fas fa-save"></i>Save All Matched Rows';}
+            alert('Network error: '+e.message);
+        });
 }
 
 // ── Rental Data — 3 sources ───────────────────────────────────────────────────

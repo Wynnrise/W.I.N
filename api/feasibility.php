@@ -41,6 +41,12 @@ if (!$property) {
     exit;
 }
 
+if ((float)$property['lot_area_sqm'] > 3000) {
+    http_response_code(403);
+    echo json_encode(['error' => 'Lot exceeds maximum area for residential multiplex assessment']);
+    exit;
+}
+
 $slug = wynston_resolve_slug($property['neighbourhood_slug']);
 $city = strtolower($property['city'] ?? 'vancouver');
 if (empty($slug)) $slug = 'metro-vancouver';
@@ -196,7 +202,10 @@ elseif  ($dom_diff >  1) { $dom_arrow = '↑'; $dom_colour = 'amber'; $dom_label
 else                      { $dom_arrow = '—'; $dom_colour = 'gray';  $dom_label = 'Stable'; }
 
 // ── Eligibility ───────────────────────────────────────────────
-$lot_width = (float)$property['lot_width_m'];
+// Width resolution: manual override > cadastral/polygon
+$lot_width = !empty($property['frontage_override_m'])
+    ? (float)$property['frontage_override_m']
+    : (float)$property['lot_width_m'];
 $lot_area  = (float)$property['lot_area_sqm'];
 $transit   = (bool)$property['transit_proximate'];
 $lane      = (bool)$property['lane_access'];

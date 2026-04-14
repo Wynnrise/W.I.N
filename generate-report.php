@@ -84,6 +84,14 @@ $sub_tier    = $developer['subscription_tier'] ?? 'free';
 $ls = $pdo->prepare("SELECT * FROM plex_properties WHERE pid=? LIMIT 1");
 $ls->execute([$pid]); $lot = $ls->fetch();
 if (!$lot) die('Lot not found.');
+if ((float)$lot['lot_area_sqm'] > 3000) die('This lot exceeds the maximum area for residential multiplex assessment.');
+
+// Check exclusion list
+try {
+    $excl = $pdo->prepare("SELECT pid FROM excluded_pids WHERE pid = ? LIMIT 1");
+    $excl->execute([$pid]);
+    if ($excl->fetch()) die('This lot is not available for residential multiplex assessment.');
+} catch (PDOException $e) {}
 
 // Secondary: covenant/easement from constraint_flags (these only live there)
 $cf_row = [];
@@ -96,7 +104,9 @@ $address          = $lot['address'] ?? 'Address unavailable';
 $pid_fmt          = preg_replace('/(\d{3})(\d{3})(\d{3})/', '$1-$2-$3', preg_replace('/\D/','',$pid));
 $lat              = (float)($lot['lat'] ?? 0);
 $lng              = (float)($lot['lng'] ?? 0);
-$lot_width_m      = (float)($lot['lot_width_m']  ?? 0);
+$lot_width_m      = !empty($lot['frontage_override_m'])
+    ? (float)$lot['frontage_override_m']
+    : (float)($lot['lot_width_m'] ?? 0);
 $lot_depth_m      = (float)($lot['lot_depth_m']  ?? 0);
 $lot_area_sqm     = (float)($lot['lot_area_sqm'] ?? 0);
 $lot_width_ft     = round($lot_width_m/0.3048, 1);
@@ -112,9 +122,12 @@ $peat_zone        = (bool)($lot['peat_zone'] ?? false);
 $floodplain_risk  = $lot['floodplain_risk'] ?? 'none';
 if (empty($floodplain_risk)) $floodplain_risk = 'none';
 $in_floodplain    = ($floodplain_risk !== 'none');
-// Covenant/easement from constraint_flags (secondary — graceful if missing)
+// Covenant from constraint_flags (secondary — graceful if missing)
 $covenant_present = (bool)($cf_row['covenant_present'] ?? false);
 $covenant_types   = $cf_row['covenant_types'] ?? '';
+// Easement — read from plex_properties (populated by import_easements.php)
+$easement_present = (bool)($lot['easement_present'] ?? false);
+$easement_types   = $lot['easement_types'] ?? '';
 $assessed_land    = (int)($lot['assessed_land_value'] ?? 0);
 if ($assessed_land===0 && $lot_area_sqm>0) $assessed_land = (int)($lot_area_sqm*10.7639*850);
 $assessment_year  = $lot['assessment_year'] ?? date('Y');
@@ -149,10 +162,14 @@ $ms->execute([$nb_slug]); $market = $ms->fetch();
 // Rental data
 $mr = $pdo->prepare("SELECT avg_rent_1br, avg_rent_2br, avg_rent_3br FROM monthly_market_stats WHERE neighbourhood_slug=? AND is_active=1 AND csv_type IN('rental','rebgv_rental') AND (avg_rent_1br>0 OR avg_rent_2br>0 OR avg_rent_3br>0) ORDER BY data_month DESC LIMIT 1");
 $mr->execute([$nb_slug]); $market_rent=$mr->fetch();
-$metro = $pdo->query("SELECT AVG(avg_sold_psf_duplex) as p FROM monthly_market_stats WHERE is_active=1 AND data_month>=DATE_SUB(CURDATE(),INTERVAL 3 MONTH)")->fetch();
-$current_psf = (float)($market['avg_sold_psf_duplex'] ?? $metro['p'] ?? 985);
-$comp_count  = (int)($market['sales_count'] ?? 0);
-$data_as_of  = !empty($market['data_month']) ? date('F Y', strtotime($market['data_month'])) : 'Metro Vancouver Benchmark';
+// HPI aggregate fallback — price_per_sqft + sales_count from hpi_duplex rows
+$hpi = $pdo->prepare("SELECT price_per_sqft, sales_count, data_month FROM monthly_market_stats WHERE neighbourhood_slug=? AND is_active=1 AND csv_type='hpi_duplex' AND price_per_sqft>0 ORDER BY data_month DESC LIMIT 1");
+$hpi->execute([$nb_slug]); $hpi_row = $hpi->fetch();
+// Metro fallback uses hpi_duplex price_per_sqft (that's what HPI upload stores)
+$metro = $pdo->query("SELECT AVG(price_per_sqft) as p FROM monthly_market_stats WHERE is_active=1 AND csv_type='hpi_duplex' AND price_per_sqft>0 AND data_month>=DATE_SUB(CURDATE(),INTERVAL 3 MONTH)")->fetch();
+$current_psf = (float)($market['avg_sold_psf_duplex'] ?? $hpi_row['price_per_sqft'] ?? $metro['p'] ?? 985);
+$comp_count  = (int)($market['sales_count'] ?? $hpi_row['sales_count'] ?? 0);
+$data_as_of  = !empty($market['data_month']) ? date('F Y', strtotime($market['data_month'])) : (!empty($hpi_row['data_month']) ? date('F Y', strtotime($hpi_row['data_month'])) : 'Metro Vancouver Benchmark');
 $conf_label  = $comp_count>=5 ? 'High Confidence' : ($comp_count>=2 ? 'Moderate Confidence' : 'Indicative');
 $conf_short  = $comp_count>=5 ? 'High' : ($comp_count>=2 ? 'Moderate' : 'Indicative');
 
@@ -1114,10 +1131,23 @@ table.dt tr:last-child td{border-bottom:none}
         <li class="constraint-item">
             <div class="constraint-icon <?= $cc ?>"><?= $ck ?></div>
             <div>
-                <div class="constraint-title">Title Encumbrances</div>
+                <div class="constraint-title">Covenant</div>
                 <div class="constraint-sub">
                     <?php if($covenant_present):?>Covenant registered: <?= htmlspecialchars($covenant_types) ?>. Obtain full LTSA title search before proceeding.
-                    <?php else:?>No covenant or easement flags on record.<?php endif; ?>
+                    <?php else:?>No covenant registered on record.<?php endif; ?>
+                </div>
+            </div>
+        </li>
+
+        <!-- Easement -->
+        <?php $ec=$easement_present?'warn':'clear'; $ek=$easement_present?'!':'✓'; ?>
+        <li class="constraint-item">
+            <div class="constraint-icon <?= $ec ?>"><?= $ek ?></div>
+            <div>
+                <div class="constraint-title">Easement / Right of Way</div>
+                <div class="constraint-sub">
+                    <?php if($easement_present):?>Registered: <?= htmlspecialchars($easement_types) ?>. Easements may restrict building placement or require setbacks. Verify with a real estate lawyer before proceeding.
+                    <?php else:?>No easement or right of way on record.<?php endif; ?>
                 </div>
             </div>
         </li>
@@ -1913,8 +1943,18 @@ $bars = [
 <div class="risk-item active">
     <div class="risk-num">⚠</div>
     <div class="risk-body">
-        <div class="risk-title">Covenant / Easement — Title Review Required</div>
+        <div class="risk-title">Covenant — Title Review Required</div>
         <div class="risk-desc">Registered encumbrance type: <?= htmlspecialchars($covenant_types) ?>. The specific terms of this covenant may restrict development or impose conditions. Obtain a full LTSA title search and legal review before proceeding.</div>
+    </div>
+</div>
+<?php endif; ?>
+
+<?php if($easement_present): ?>
+<div class="risk-item active">
+    <div class="risk-num">⚠</div>
+    <div class="risk-body">
+        <div class="risk-title">Easement / Right of Way — Verify Before Proceeding</div>
+        <div class="risk-desc">Registered: <?= htmlspecialchars($easement_types) ?>. Easements and rights of way run with the land and are binding on all future owners. They may restrict where structures can be placed, require utility access corridors, or impose setback obligations. Confirm the specific terms with a real estate lawyer and surveyor before making an offer.</div>
     </div>
 </div>
 <?php endif; ?>
@@ -1961,7 +2001,7 @@ $bars = [
         <div class="back-nextstep-text"><?= htmlspecialchars($next_step) ?></div>
     </div>
 
-    <?php if($in_floodplain||$peat_zone||($heritage!=='none')||$covenant_present): ?>
+    <?php if($in_floodplain||$peat_zone||($heritage!=='none')||$covenant_present||$easement_present): ?>
     <div style="margin-top:16px;padding:16px 20px;background:rgba(186,26,26,.15);border-left:2px solid rgba(186,26,26,.5);font-size:11px;color:rgba(255,255,255,.7);line-height:1.6;flex-shrink:0">
         <strong style="color:rgba(255,255,255,.9)">Active Constraints:</strong>
         <?php
@@ -1969,7 +2009,8 @@ $bars = [
         if($heritage!=='none') $flags[]='Heritage Category '.$heritage;
         if($peat_zone) $flags[]='Peat Zone (+$150k contingency)';
         if($in_floodplain) $flags[]='Floodplain Risk ('.ucfirst($floodplain_risk).')';
-        if($covenant_present) $flags[]='Title Encumbrance';
+        if($covenant_present) $flags[]='Covenant on Title';
+        if($easement_present) $flags[]='Easement / Right of Way';
         echo htmlspecialchars(implode(' · ',$flags));
         ?> — See risk analysis on page 7.
     </div>

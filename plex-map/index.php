@@ -11,6 +11,8 @@ require_once __DIR__ . '/../dev-auth.php';
 <link href="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css" rel="stylesheet">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
@@ -196,6 +198,15 @@ html,body{height:100%;overflow:hidden;font-family:'Segoe UI',system-ui,sans-seri
 /* gives a property-footprint feel on the map   */
 .mapboxgl-canvas{cursor:default}
 @media(max-width:700px){:root{--panel-w:100vw}.w-3d-btn{right:12px;bottom:80px}.w-tool-menu{top:calc(var(--header-h) + 70px)}}
+.sp-wrap{display:flex;flex-wrap:wrap;gap:5px}
+.sp-pill{background:rgba(0,36,70,.08);border:1px solid rgba(0,36,70,.2);color:#666;font-size:10px;font-weight:700;padding:4px 10px;border-radius:20px;cursor:pointer;transition:.15s;white-space:nowrap}
+.sp-pill:hover{background:rgba(0,36,70,.15);border-color:var(--navy);color:var(--navy)}
+.sp-pill.active{background:var(--navy);border-color:var(--navy);color:#fff}
+.w-viz-btn{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin-top:10px;padding:9px;background:var(--navy);color:var(--gold);border:1.5px solid var(--gold);border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;transition:.2s}
+.w-viz-btn:hover{background:var(--gold);color:var(--navy)}
+.sp-btn{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.7);font-size:11px;font-weight:600;padding:5px 11px;border-radius:20px;cursor:pointer;transition:.15s;white-space:nowrap}
+.sp-btn:hover{background:rgba(201,168,76,.15);border-color:var(--gold);color:var(--gold)}
+.sp-btn.active{background:rgba(201,168,76,.2);border-color:var(--gold);color:var(--gold)}
 </style>
 </head>
 <body>
@@ -354,7 +365,7 @@ const MAPBOX_TOKEN = 'pk.eyJ1IjoiaGVucmluZ3V5ZW4iLCJhIjoiY21uYjg3dTNnMHFkZjJwcHR
 const IS_LOGGED_IN = <?= isset($_SESSION['dev_id']) ? 'true' : 'false' ?>;
 
 // ── State ─────────────────────────────────────────────────────
-let map, currentLot = null, is3D = false, fetchSeq = 0;
+let map, currentLot = null, currentLotLat = 0, currentLotLng = 0, is3D = false, fetchSeq = 0;
 let currentPath = 'strata', currentData = null;
 let toolState = { halos:true, skytrain:true, permits:true, neighbourhoods:false, '6unit':false, '4unit':false, duplex:false, buyout:false, nopark:false, heritage:false, peat:false, flood:false };
 
@@ -366,6 +377,8 @@ let highlightOpacity   = 1;
 let highlightDirection = -1;
 
 function setSelectedLot(lat, lng) {
+  currentLotLat = lat;
+  currentLotLng = lng;
   if (!map.getSource('selected-lot')) return;
   map.getSource('selected-lot').setData({
     type: 'FeatureCollection',
@@ -410,7 +423,7 @@ map.addControl(new mapboxgl.ScaleControl({ unit: 'metric' }), 'bottom-right');
 // ── Add all map sources and layers ────────────────────────────
 function addMapSourcesAndLayers() {
   if (!map.getSource('lots'))
-    map.addSource('lots', { type:'geojson', data:'/api/lots.php', generateId:true });
+    map.addSource('lots', { type:'geojson', data:'/api/lots.php?v=2', generateId:true });
   if (!map.getSource('permits'))
     map.addSource('permits', { type:'geojson', data:'/api/permits.php', generateId:true });
   if (!map.getSource('transit-halos'))
@@ -631,10 +644,7 @@ map.on('load', () => {
 
 // ── Transit data ──────────────────────────────────────────────
 function loadTransitData() {
-  fetch('/api/lots.php').then(r=>r.json()).then(data=>{
-    if (!data.features) return;
-    // Cache all lot features for the heart layer — avoids a second fetch
-    if(_lotsCache.length===0) _lotsCache=data.features;
+  fetch('/api/lots.php?v=2').then(r=>r.json()).then(data=>{
     // If saved PIDs already loaded, render hearts now
     if(savedLotPids.size>0) _renderHearts();
     const seen = new Set();
@@ -751,7 +761,7 @@ function openPanel(pid) {
   setTimeout(()=>map.resize(),310);
 
   if(!IS_LOGGED_IN){
-    fetch('/api/lots.php').then(r=>r.json()).then(data=>{
+    fetch('/api/lots.php?v=2').then(r=>r.json()).then(data=>{
       const feature=data.features&&data.features.find(f=>f.properties.pid===pid);
       if(feature)renderGate1(feature.properties); else showError('Lot not found');
     }).catch(()=>showError()); return;
@@ -979,16 +989,31 @@ function renderOutlookTab(d) {
 }
 
 function renderDesign(design) {
+  const styles = ['Modern','West Coast','Vancouver Special','Contemporary','Classic','Minimalist','French Country','English Tudor','Mayfair'];
+  const pills = styles.map((s,i) =>
+    `<button class="sp-pill${i===0?' active':''}" onclick="selectBuildStyle(this,'${s}')">${s}</button>`
+  ).join('');
   return `<div class="w-section"><div class="w-section-title">Blueprint Match — BC Standardized Design</div>
     <div class="w-design">
-      <img class="w-design-thumb" src="${design.thumbnail||'/assets/img/design-placeholder.jpg'}" onerror="this.src='/assets/img/design-placeholder.jpg'">
+      <div class="w-design-thumb" style="background:var(--navy);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:3px;flex-shrink:0">
+        <i class="fas fa-home" style="color:var(--gold);font-size:20px"></i>
+        <span style="font-size:8px;color:rgba(255,255,255,.5);font-weight:700">${design.design_id}</span>
+      </div>
       <div class="w-design-info">
         <div class="w-design-name">${design.design_name}</div>
         <div style="font-size:11px;color:#888">${design.catalogue} — ${design.design_id}</div>
         ${design.saving_note?`<div class="w-design-saving"><i class="fas fa-check-circle"></i> ${design.saving_note}</div>`:''}
         ${design.external_url?`<a class="w-design-link" href="${design.external_url}" target="_blank">View Plans →</a>`:''}
       </div>
-    </div></div>`;
+    </div>
+    <div style="margin-top:10px">
+      <div style="font-size:10px;font-weight:700;color:#aaa;letter-spacing:.5px;text-transform:uppercase;margin-bottom:6px">Select Style</div>
+      <div class="sp-wrap">${pills}</div>
+    </div>
+    <button class="w-viz-btn" onclick="toggle3D()">
+      <i class="fas fa-cube"></i> Visualize on Lot
+    </button>
+  </div>`;
 }
 
 function buildFlags(p) {
@@ -996,7 +1021,8 @@ function buildFlags(p) {
   if(p.heritage_category==='A'||p.heritage_category==='B')f+=`<div class="w-flag w-flag-red"><i class="fas fa-landmark"></i><span><strong>Heritage Category ${p.heritage_category}</strong> — Permit delays likely. HRA required.</span></div>`;
   else if(p.heritage_category==='C')f+=`<div class="w-flag w-flag-yellow"><i class="fas fa-landmark"></i><span><strong>Heritage Category C</strong> — Inspection may be required.</span></div>`;
   if(p.peat_zone)f+=`<div class="w-flag w-flag-yellow"><i class="fas fa-exclamation-triangle"></i><span><strong>Peat Zone</strong> — $150,000 contingency added.</span></div>`;
-  if(p.covenant_present)f+=`<div class="w-flag w-flag-blue"><i class="fas fa-file-contract"></i><span><strong>Title encumbrance detected</strong> — Obtain a title search before proceeding.</span></div>`;
+  if(p.covenant_present)f+=`<div class="w-flag w-flag-blue"><i class="fas fa-file-contract"></i><span><strong>Covenant on Title</strong> — Obtain a full title search before proceeding.</span></div>`;
+  if(p.easement_present)f+=`<div class="w-flag w-flag-blue"><i class="fas fa-road"></i><span><strong>Easement / Right of Way</strong> — ${p.easement_types||'Registered easement'}. Verify with a real estate lawyer.</span></div>`;
   if(!p.lane_access)f+=`<div class="w-flag w-flag-yellow"><i class="fas fa-road"></i><span><strong>No lane access detected</strong> — Verify with COV.</span></div>`;
   if(p.floodplain_risk==='high')f+=`<div class="w-flag w-flag-red"><i class="fas fa-water"></i><span><strong>Floodplain</strong> — COV designated flood area. May affect permits, financing, and insurance.</span></div>`;
 
@@ -1011,22 +1037,141 @@ function getEligBadge(width,transit,lane) {
 }
 
 // ── 3D toggle ─────────────────────────────────────────────────
+// ── 3D / GLB on map ───────────────────────────────────────────
+let currentBuildStyle = 'Modern';
+
+const STYLE_MODELS = {
+  'Modern':            'METER.glb',
+  'West Coast':        'METER.glb',
+  'Vancouver Special': 'METER.glb',
+  'Contemporary':      'METER.glb',
+  'Classic':           'METER.glb',
+  'Minimalist':        'METER.glb',
+  'French Country':    'METER.glb',
+  'English Tudor':     'METER.glb',
+  'Mayfair':           'METER.glb',
+};
+
+function selectBuildStyle(btn, style) {
+  document.querySelectorAll('.sp-pill').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  currentBuildStyle = style;
+  if(is3D) { removeGLBLayer(); setTimeout(loadGLBOnMap, 100); }
+}
+
 function toggle3D() {
-  is3D=!is3D;
-  const btn=document.getElementById('btn3d');
-  if(is3D&&currentData){
-    map.easeTo({pitch:60,bearing:-20,duration:800});
-    btn.innerHTML='<i class="fas fa-map" style="margin-right:5px"></i>Back to Map';
-    if(map.getLayer('lot-extrusion'))map.removeLayer('lot-extrusion');
-    const w=currentData.property.lot_width_m;
-    map.addLayer({id:'lot-extrusion',type:'fill-extrusion',source:'lots',
-      filter:['==',['get','pid'],currentData.property.pid],
-      paint:{'fill-extrusion-color':'#002446','fill-extrusion-height':w>=15.1?12.5:w>=10.0?10.5:8.5,'fill-extrusion-base':0,'fill-extrusion-opacity':0.85}});
+  is3D = !is3D;
+  const btn = document.getElementById('btn3d');
+  if(is3D && currentData) {
+    map.easeTo({pitch:60, bearing:-20, duration:800});
+    btn.innerHTML = '<i class="fas fa-map" style="margin-right:5px"></i>Back to Map';
+    btn.classList.add('visible');
+    setTimeout(loadGLBOnMap, 900); // wait for map tilt to complete
   } else {
-    map.easeTo({pitch:0,bearing:0,duration:600});
-    btn.innerHTML='<i class="fas fa-cube" style="margin-right:5px"></i>Visualize Build';
-    if(map.getLayer('lot-extrusion'))map.removeLayer('lot-extrusion');
+    map.easeTo({pitch:0, bearing:0, duration:600});
+    btn.innerHTML = '<i class="fas fa-cube" style="margin-right:5px"></i>Visualize Build';
+    removeGLBLayer();
+    if(map.getLayer('lot-extrusion')) map.removeLayer('lot-extrusion');
   }
+}
+
+function removeGLBLayer() {
+  if(map.getLayer('glb-model')) map.removeLayer('glb-model');
+}
+
+function loadGLBOnMap() {
+  if(!currentData || !currentLotLat || !currentLotLng) {
+    fallbackExtrusion(); return;
+  }
+  if(typeof THREE === 'undefined' || !THREE.GLTFLoader) {
+    fallbackExtrusion(); return;
+  }
+
+  const lng = currentLotLng;
+  const lat = currentLotLat;
+  const lotWidth = parseFloat(currentData.property.lot_width_m) || 10.0;
+  const NATIVE_WIDTH = 12.50; // BC catalogue Building Block full duplex width
+  const scale = lotWidth / NATIVE_WIDTH;
+  const modelFile = STYLE_MODELS[currentBuildStyle] || 'METER.glb';
+  const modelUrl = '/assets/models/' + modelFile;
+
+  removeGLBLayer();
+
+  const customLayer = {
+    id: 'glb-model',
+    type: 'custom',
+    renderingMode: '3d',
+
+    onAdd(map, gl) {
+      this.camera   = new THREE.Camera();
+      this.scene    = new THREE.Scene();
+
+      const ambient = new THREE.AmbientLight(0xffffff, 0.9);
+      this.scene.add(ambient);
+      const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+      sun.position.set(50, 100, 50).normalize();
+      this.scene.add(sun);
+      const fill = new THREE.DirectionalLight(0xffffff, 0.4);
+      fill.position.set(-50, 50, -50).normalize();
+      this.scene.add(fill);
+
+      const loader = new THREE.GLTFLoader();
+      loader.load(
+        modelUrl,
+        gltf => {
+          const model = gltf.scene;
+          model.scale.set(scale, scale, scale);
+          this.scene.add(model);
+          map.triggerRepaint();
+        },
+        undefined,
+        () => fallbackExtrusion()
+      );
+
+      this.renderer = new THREE.WebGLRenderer({
+        canvas: map.getCanvas(),
+        context: gl,
+        antialias: true
+      });
+      this.renderer.autoClear = false;
+    },
+
+    render(gl, matrix) {
+      const mercator = mapboxgl.MercatorCoordinate.fromLngLat({lng, lat}, 0);
+      const mScale   = mercator.meterInMercatorCoordinateUnits();
+
+      const transform = new THREE.Matrix4()
+        .makeTranslation(mercator.x, mercator.y, mercator.z)
+        .scale(new THREE.Vector3(mScale, -mScale, mScale));
+
+      this.camera.projectionMatrix = new THREE.Matrix4()
+        .fromArray(matrix)
+        .multiply(transform);
+
+      this.renderer.resetState();
+      this.renderer.render(this.scene, this.camera);
+      this.map.triggerRepaint();
+    }
+  };
+
+  map.addLayer(customLayer);
+}
+
+function fallbackExtrusion() {
+  removeGLBLayer();
+  if(!currentData) return;
+  const w = currentData.property.lot_width_m;
+  if(map.getLayer('lot-extrusion')) map.removeLayer('lot-extrusion');
+  map.addLayer({
+    id: 'lot-extrusion', type: 'fill-extrusion', source: 'lots',
+    filter: ['==', ['get','pid'], currentData.property.pid],
+    paint: {
+      'fill-extrusion-color':   '#002446',
+      'fill-extrusion-height':  w>=15.1?12.5:w>=10.0?10.5:8.5,
+      'fill-extrusion-base':    0,
+      'fill-extrusion-opacity': 0.85
+    }
+  });
 }
 
 // ── Action handlers ───────────────────────────────────────────
@@ -1074,7 +1219,7 @@ function updateSavedLotLayer(){
       _lotsCache=src._data.features;
     } else {
       // Source not loaded yet — fetch directly
-      fetch('/api/lots.php').then(r=>r.json()).then(data=>{
+      fetch('/api/lots.php?v=2').then(r=>r.json()).then(data=>{
         if(data.features){ _lotsCache=data.features; _renderHearts(); }
       }).catch(()=>{});
       return;

@@ -1961,7 +1961,7 @@ $with_coords = count(array_filter($listings, function($r) { return !empty($r['la
 <div class="admin-body">
 
 <?php if ($active_tab === 'developers'): ?>
-<?php include __DIR__ . '/admin_members_tab.php'; ?>
+<?php if (file_exists(__DIR__ . '/admin_members_tab.php')) include __DIR__ . '/admin_members_tab.php'; ?>
 <?php elseif ($active_tab === 'submissions'): ?>
 <!-- ══════════════════════════════════════════════════════════
      SUBMISSIONS TAB
