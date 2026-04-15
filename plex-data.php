@@ -458,18 +458,85 @@ body{background:#f0f4f8;font-family:'Segoe UI',system-ui,sans-serif;margin:0;pad
       // ══════════════════════════════════════════════════════════════════════
 if ($active_tab === 'market-prices'): ?>
 
-<!-- ── Combined REBGV Monthly Upload ───────────────────────────────────────── -->
-<div class="card">
-    <h3><i class="fas fa-file-csv me-2" style="color:var(--blue)"></i>REBGV Monthly Market Data
+<!-- ── Section A: Paragon Sold CSV ─────────────────────────────────────────── -->
+<div class="card" style="margin-bottom:24px;">
+    <h3><i class="fas fa-file-csv me-2" style="color:var(--blue)"></i>Section A — Paragon Sold Duplex CSV
         <span class="freq-badge ms-2">Monthly</span></h3>
-    <p class="sub">Upload the CSV produced by your Python pipeline script. One file per area per month — contains duplex $/sqft, prices by type, DOM, sales counts, and YoY%. Updates both the pro forma and Wynston Outlook in one pass.</p>
+    <p class="sub">Upload your Paragon export of sold duplex listings. Accepts P (Pending) and F (Firm). Calculates $/sqft from Sold Price ÷ sqft where blank. Routes each sale to the correct COV neighbourhood via the S/A code. Filters to Yr Blt 2020+.</p>
     <div class="info-box">
-        <strong>Your monthly workflow:</strong>
-        Run <code style="background:#e8e4dd;padding:1px 5px;border-radius:3px;">python rebgv_pipeline.py 2026-03-Vancouver-East.pdf Duplex.csv</code>
-        → upload the output CSV here → done.<br><br>
-        <strong>Writes to:</strong>
-        <code>neighbourhood_hpi_history</code> — prices, DOM, YoY%, sales (Outlook Layer 2) ·
-        <code>monthly_market_stats</code> — duplex $/sqft (pro forma exit value)
+        <strong>Paragon export settings:</strong>
+        Status = <strong>P + F</strong> · Type = <strong>1/2 Duplex</strong> · Yr Blt = <strong>2020+</strong> · Sold Date = last 24 months · Area = Vancouver West + East combined<br>
+        Columns needed: <code>Address, S/A, Status, Sold Price, Sold Price per SqFt, TotFlArea, Yr Blt, Sold Date, DOM, TypeDwel</code>
+    </div>
+    <div id="chA-result"></div>
+    <div class="row g-3 mb-3">
+        <div class="col-md-4">
+            <label class="form-label">Data Month <small style="color:#aaa">(fallback if no Sold Date in CSV)</small></label>
+            <input type="month" id="chA_month" class="form-control" value="<?= date('Y-m') ?>">
+        </div>
+        <div class="col-md-3">
+            <label class="form-label">Min Year Built</label>
+            <select id="chA_yr_min" class="form-select">
+                <option value="2020" selected>2020+</option>
+                <option value="2018">2018+</option>
+                <option value="2015">2015+</option>
+                <option value="0">All years</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- Inline script — must be defined BEFORE the input onchange fires -->
+    <script>
+    var _chA_file = null;
+    function chAHandleFile(f) {
+        if (!f) return;
+        _chA_file = f;
+        document.getElementById('chA_dz').classList.add('dz-selected');
+        document.getElementById('chA_dz_icon').className = 'fas fa-check-circle';
+        document.getElementById('chA_dz_text').textContent = '\u2705 ' + f.name + ' \u2014 ready to upload';
+    }
+    function chAHandleDrop(e) {
+        e.preventDefault();
+        document.getElementById('chA_dz').classList.remove('dz-active');
+        var files = e.dataTransfer && e.dataTransfer.files;
+        if (files && files[0]) chAHandleFile(files[0]);
+    }
+    function chADragOver(e) { e.preventDefault(); document.getElementById('chA_dz').classList.add('dz-active'); }
+    function chADragLeave()  { document.getElementById('chA_dz').classList.remove('dz-active'); }
+    </script>
+
+    <div class="dz" id="chA_dz"
+         onclick="document.getElementById('chA_file').click()"
+         ondragover="chADragOver(event)"
+         ondragleave="chADragLeave()"
+         ondrop="chAHandleDrop(event)">
+        <div><i class="fas fa-file-csv dz-icon" id="chA_dz_icon"></i></div>
+        <div class="dz-text" id="chA_dz_text">Drag &amp; drop Paragon sold CSV here, or <span style="color:var(--brand);text-decoration:underline;">click to browse</span></div>
+        <input type="file" id="chA_file" accept=".csv" style="display:none"
+               onchange="chAHandleFile(this.files[0])">
+    </div>
+
+    <div id="chA_progress" style="display:none;margin-top:12px;padding:12px 16px;background:#f0f9ff;border-radius:8px;font-size:13px;color:#0369a1;">
+        <i class="fas fa-spinner fa-spin me-2"></i><span id="chA_progress_msg">Processing rows...</span>
+    </div>
+    <button class="btn-primary-w mt-3" id="chA_submit" onclick="submitChannelA()">
+        <i class="fas fa-upload"></i>Upload &amp; Process
+    </button>
+    <div id="chA_preview" style="display:none;margin-top:20px;">
+        <div id="chA_stats" style="margin-bottom:10px;font-size:13px;color:#15803d;font-weight:600;"></div>
+        <div id="chA_errors" style="margin-bottom:10px;font-size:12px;color:#b91c1c;"></div>
+        <div id="chA_skipped" style="margin-bottom:10px;"></div>
+        <div style="overflow-x:auto;" id="chA_table_wrap"></div>
+    </div>
+</div>
+
+<!-- ── Section B: HPI Bulk (DOM + Benchmark Prices from PDF) ────────────────── -->
+<div class="card">
+    <h3><i class="fas fa-file-csv me-2" style="color:var(--blue)"></i>Section B — REBGV HPI Data (DOM + Benchmark Prices)
+        <span class="freq-badge ms-2">Monthly</span></h3>
+    <p class="sub">Upload neighbourhood-level HPI data from the monthly REBGV PDF — DOM, benchmark prices, sales counts. <strong>Not for $/sqft</strong> — that comes from Section A above.</p>
+    <div class="info-box">
+        <strong>Writes to:</strong> <code>neighbourhood_hpi_history</code> — DOM, benchmark prices, sales counts (Outlook Layer 2).
     </div>
     <div id="hpi-result"></div>
     <div class="row g-3 mb-3">
@@ -1276,50 +1343,56 @@ $fa = $pdo->query("SELECT * FROM financing_assumptions ORDER BY updated_at DESC 
 </div><!-- /content -->
 
 <script>
-// ── Channel A ─────────────────────────────────────────────────────────────────
-(function(){
-    var dz=document.getElementById('chA_dz'); if(!dz)return;
-    ['dragenter','dragover'].forEach(function(e){dz.addEventListener(e,function(ev){ev.preventDefault();dz.classList.add('dz-active');});});
-    dz.addEventListener('dragleave',function(){dz.classList.remove('dz-active');});
-    dz.addEventListener('drop',function(e){e.preventDefault();dz.classList.remove('dz-active');document.getElementById('chA_file').files=e.dataTransfer.files;setChAFile(e.dataTransfer.files[0].name);});
-    document.getElementById('chA_file').addEventListener('change',function(){if(this.files[0])setChAFile(this.files[0].name);});
-    function setChAFile(n){dz.classList.add('dz-selected');document.getElementById('chA_dz_icon').className='fas fa-check-circle';document.getElementById('chA_dz_text').textContent='✅ '+n;}
-})();
+// ── Channel A — submit (file handling defined inline in HTML above) ───────────
+function submitChannelA() {
+    if (!_chA_file) { showR('chA-result','Please select or drop a CSV file first.','err'); return; }
+    var month = document.getElementById('chA_month').value;
+    var yr    = document.getElementById('chA_yr_min').value;
+    if (!month) { showR('chA-result','Please select a data month.','err'); return; }
 
-function submitChannelA(){
-    var file=document.getElementById('chA_file').files[0];
-    var month=document.getElementById('chA_month').value;
-    var type=document.getElementById('chA_type').value;
-    if(!file){showR('chA-result','Please select a CSV file.','err');return;}
-    if(!month){showR('chA-result','Please select a data month.','err');return;}
-    var fd=new FormData();fd.append('rebgv_csv',file);fd.append('data_month',month);fd.append('csv_type',type);
-    document.getElementById('chA_progress').style.display='block';
-    document.getElementById('chA_submit').disabled=true;
-    document.getElementById('chA_preview').style.display='none';
-    document.getElementById('chA-result').innerHTML='';
-    var msgs=['Parsing CSV…','Geocoding addresses…','Applying versioning…'];
-    var mi=0,pmsg=document.getElementById('chA_progress_msg');
-    var tk=setInterval(function(){pmsg.textContent=msgs[mi++%msgs.length];},2500);
-    fetch('api/plex_upload_a.php',{method:'POST',body:fd})
-    .then(function(r){return r.json();})
+    var fd = new FormData();
+    fd.append('rebgv_csv', _chA_file, _chA_file.name);
+    fd.append('data_month', month);
+    fd.append('csv_type', 'duplex');
+    fd.append('yr_blt_min', yr);
+
+    document.getElementById('chA_progress').style.display = 'block';
+    document.getElementById('chA_submit').disabled = true;
+    document.getElementById('chA_preview').style.display = 'none';
+    document.getElementById('chA-result').innerHTML = '';
+    document.getElementById('chA_stats').innerHTML = '';
+    document.getElementById('chA_errors').innerHTML = '';
+    document.getElementById('chA_skipped').innerHTML = '';
+
+    var mi = 0;
+    var msgs = ['Reading CSV rows...','Filtering by status and year...','Mapping S/A codes to COV neighbourhoods...','Calculating $/sqft averages...','Saving to database...'];
+    var pmsg = document.getElementById('chA_progress_msg');
+    var tk = setInterval(function(){ pmsg.textContent = msgs[mi++ % msgs.length]; }, 1800);
+
+    fetch('api/plex_upload_a.php', { method:'POST', body:fd })
+    .then(function(r){ if (!r.ok) throw new Error('Server returned ' + r.status); return r.json(); })
     .then(function(d){
         clearInterval(tk);
-        document.getElementById('chA_progress').style.display='none';
-        document.getElementById('chA_submit').disabled=false;
-        if(!d.success){showR('chA-result',d.error||'Upload failed.','err');return;}
-        showR('chA-result','✅ Upload complete — '+d.inserted+' rows inserted for '+d.month+' ('+d.csv_type+')','ok');
-        var stats=document.getElementById('chA_stats');
-        stats.innerHTML=pill(d.inserted,'Inserted','#d4f5e2','#1a7a45')+pill(d.skipped,'Skipped','#fef9c3','#854d0e')+pill(d.errors?d.errors.length:0,'Errors','#fee2e2','#b91c1c');
-        if(d.errors&&d.errors.length)document.getElementById('chA_errors').innerHTML='<strong>Warnings:</strong><br>'+d.errors.slice(0,10).join('<br>');
-        if(d.rows&&d.rows.length){
-            var h='<table class="preview-table"><thead><tr><th>Address</th><th>COV Neighbourhood</th><th>REBGV Area</th><th>Yr Blt</th><th>Sold $</th><th>$/PSF</th><th>Geocoded</th></tr></thead><tbody>';
-            d.rows.forEach(function(r){h+='<tr><td>'+esc(r.address)+'</td><td>'+esc(r.nb_slug)+'</td><td>'+esc(r.rebgv_area||'—')+'</td><td>'+(r.yr_blt||'—')+'</td><td>'+(r.sold_price?'$'+r.sold_price.toLocaleString():'—')+'</td><td>'+(r.price_per_sqft?'$'+r.price_per_sqft:'—')+'</td><td>'+(r.geocoded?'<span style="color:#15803d">✓</span>':'<span style="color:#b91c1c">✗</span>')+'</td></tr>';});
+        document.getElementById('chA_progress').style.display = 'none';
+        document.getElementById('chA_submit').disabled = false;
+        if (!d.success) { showR('chA-result','❌ '+(d.error||'Upload failed.'),'err'); return; }
+        showR('chA-result','✅ '+(d.message||'Upload complete.'),'ok');
+        document.getElementById('chA_stats').innerHTML = '<strong>'+d.inserted+'</strong> rows saved · <strong>'+(d.skipped||0)+'</strong> skipped';
+        if (d.errors&&d.errors.length) document.getElementById('chA_errors').innerHTML='<strong>Warnings:</strong><br>'+d.errors.slice(0,10).join('<br>');
+        if (d.rows&&d.rows.length){
+            var h='<table class="preview-table"><thead><tr><th>Address</th><th>COV Neighbourhood</th><th>REBGV Area</th><th>Yr Blt</th><th>Sold $</th><th>$/sqft</th></tr></thead><tbody>';
+            d.rows.forEach(function(r){ h+='<tr><td>'+esc(r.address||'')+'</td><td>'+esc(r.nb_slug||'')+'</td><td>'+esc(r.rebgv_area||'')+'</td><td>'+(r.yr_blt||'—')+'</td><td>'+(r.sold_price?'$'+Number(r.sold_price).toLocaleString():'—')+'</td><td>'+(r.price_per_sqft?'$'+r.price_per_sqft:'—')+'</td></tr>'; });
             h+='</tbody></table>';
             document.getElementById('chA_table_wrap').innerHTML=h;
         }
         document.getElementById('chA_preview').style.display='block';
     })
-    .catch(function(e){clearInterval(tk);document.getElementById('chA_progress').style.display='none';document.getElementById('chA_submit').disabled=false;showR('chA-result','Network error: '+e.message,'err');});
+    .catch(function(e){
+        clearInterval(tk);
+        document.getElementById('chA_progress').style.display='none';
+        document.getElementById('chA_submit').disabled=false;
+        showR('chA-result','Network error: '+e.message,'err');
+    });
 }
 
 function pill(v,l,bg,c){return '<div class="col-auto"><div style="background:'+bg+';color:'+c+';border-radius:8px;padding:10px 16px;text-align:center;min-width:80px;"><div style="font-size:22px;font-weight:900;">'+v+'</div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;">'+l+'</div></div></div>';}

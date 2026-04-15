@@ -344,9 +344,9 @@ html,body{height:100%;overflow:hidden;font-family:'Segoe UI',system-ui,sans-seri
     <div id="ph-confidence"></div>
   </div>
   <div class="w-tabs" id="pf-tabs" style="display:none">
-    <div class="w-tab active" id="tab-strata"  onclick="switchTab('strata')">Strata / Sell</div>
-    <div class="w-tab"        id="tab-rental"  onclick="switchTab('rental')">Rental / Hold</div>
-    <div class="w-tab"        id="tab-outlook" onclick="switchTab('outlook')">Outlook</div>
+    <div class="w-tab active" id="tab-strata"  onclick="switchTab('strata')">Multiplex / Sale</div>
+    <div class="w-tab"        id="tab-rental"  onclick="switchTab('rental')">Secured Rental</div>
+    <div class="w-tab"        id="tab-outlook" onclick="switchTab('outlook')">Wynston Estimate</div>
   </div>
   <div class="w-panel-body" id="panel-body">
     <div class="w-panel-empty" id="panel-empty">

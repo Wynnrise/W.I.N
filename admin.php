@@ -1483,7 +1483,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_confirm_save']))
     }
 }
 
-// ── Neighbourhood — Add New ────────────────────────────────────────────────────
+// ── Market Data Reset ─────────────────────────────────────────────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_market_reset'])) {
+    $deleted = [];
+    try {
+        // 1. Delete wrong market stats (duplex/detached/hpi_duplex csv_types only)
+        $r1 = $pdo->exec("DELETE FROM monthly_market_stats WHERE csv_type IN ('duplex','detached','hpi_duplex')");
+        $deleted[] = "$r1 rows deleted from monthly_market_stats (duplex / detached / hpi_duplex)";
+
+        // 2. Null out psf_duplex and hpi_change_yoy in neighbourhood_hpi_history
+        // Keep DOM, benchmark prices, sales counts — those came from the PDF and are correct
+        $r2 = $pdo->exec("UPDATE neighbourhood_hpi_history SET psf_duplex=NULL, hpi_change_yoy=NULL");
+        $deleted[] = "$r2 rows updated in neighbourhood_hpi_history (psf_duplex + hpi_change_yoy nulled, DOM + benchmark kept)";
+
+        $reset_msg  = implode('<br>', $deleted);
+        $reset_type = 'ok';
+    } catch (PDOException $e) {
+        $reset_msg  = 'Error: ' . htmlspecialchars($e->getMessage());
+        $reset_type = 'err';
+    }
+}
+
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_new_neighbourhood'])) {
     // Auto-generate slug from name
     $name = trim($_POST['nb_name'] ?? '');
@@ -3418,8 +3439,88 @@ $with_coords = count(array_filter($listings, function($r) { return !empty($r['la
 <div class="admin-message" style="margin-bottom:20px;"><?= $message ?></div>
 <?php endif; ?>
 
-<div style="margin-bottom:28px;">
-    <h2 style="font-size:20px;font-weight:800;color:#002446;margin:0 0 4px;">Data Import Centre</h2>
+<div style="background:#fff;border-radius:12px;border:1px solid #fca5a5;margin-bottom:16px;overflow:hidden;">
+    <div style="display:flex;align-items:center;gap:14px;padding:18px 22px;border-bottom:1px solid #fee2e2;cursor:pointer;user-select:none;" onclick="impToggle(99)">
+        <div style="width:38px;height:38px;border-radius:9px;background:#fee2e2;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+            <i class="fas fa-trash-alt" style="color:#dc2626;font-size:16px;"></i>
+        </div>
+        <div style="flex:1;">
+            <div style="font-size:15px;font-weight:700;color:#b91c1c;">Reset Market Data</div>
+            <div style="font-size:12px;color:#888;margin-top:2px;">Clear wrong duplex $/sqft data before reimporting clean Paragon sold data</div>
+        </div>
+        <span style="font-size:10px;font-weight:700;padding:3px 10px;border-radius:12px;background:#fee2e2;color:#b91c1c;margin-right:10px;">Destructive</span>
+        <i class="fas fa-chevron-down" id="chev-99" style="color:#aaa;font-size:12px;transition:transform .2s;"></i>
+    </div>
+    <div id="imp-body-99" style="display:none;">
+        <div style="padding:22px;">
+
+            <?php if (!empty($reset_msg)): ?>
+            <div style="padding:14px 18px;border-radius:8px;margin-bottom:20px;font-size:13px;line-height:1.8;
+                background:<?= ($reset_type??'err')==='ok'?'#f0fdf4':'#fef2f2' ?>;
+                border:1px solid <?= ($reset_type??'err')==='ok'?'#86efac':'#fca5a5' ?>;
+                color:<?= ($reset_type??'err')==='ok'?'#15803d':'#b91c1c' ?>;">
+                <?= $reset_msg ?>
+            </div>
+            <?php endif; ?>
+
+            <!-- What will be deleted -->
+            <div style="background:#fef9f0;border:1px solid #fcd34d;border-radius:8px;padding:16px 20px;margin-bottom:20px;">
+                <div style="font-size:13px;font-weight:700;color:#92400e;margin-bottom:10px;">⚠ What this will delete:</div>
+                <div style="font-size:12px;color:#78350f;line-height:2;">
+                    <strong>monthly_market_stats</strong> — all rows where csv_type = duplex, detached, or hpi_duplex<br>
+                    <em style="color:#92400e">These are the wrong $/sqft figures derived from area averages and active/pending listings</em><br><br>
+                    <strong>neighbourhood_hpi_history.psf_duplex</strong> — set to NULL on all rows<br>
+                    <strong>neighbourhood_hpi_history.hpi_change_yoy</strong> — set to NULL on all rows<br>
+                    <em style="color:#92400e">DOM, benchmark prices, and sales counts are kept — those came from the PDF and are correct</em>
+                </div>
+            </div>
+
+            <!-- What is kept -->
+            <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:16px 20px;margin-bottom:20px;">
+                <div style="font-size:13px;font-weight:700;color:#15803d;margin-bottom:10px;">✓ What is NOT touched:</div>
+                <div style="font-size:12px;color:#166534;line-height:2;">
+                    monthly_market_stats — rental data (csv_type = rental, rental_livrent)<br>
+                    neighbourhood_hpi_history — dom_duplex, benchmark prices, sales_duplex<br>
+                    plex_properties — all 64,000 lots, coordinates, constraints<br>
+                    cmhc_benchmarks — CMHC rental benchmarks<br>
+                    financing_assumptions — CMHC MLI settings<br>
+                    construction_costs — build cost overrides<br>
+                    wynston_outlook — quarterly forecasts
+                </div>
+            </div>
+
+            <!-- Row counts preview -->
+            <?php
+            try {
+                $cnt_mms = $pdo->query("SELECT COUNT(*) FROM monthly_market_stats WHERE csv_type IN ('duplex','detached','hpi_duplex')")->fetchColumn();
+                $cnt_hpi = $pdo->query("SELECT COUNT(*) FROM neighbourhood_hpi_history WHERE psf_duplex IS NOT NULL OR hpi_change_yoy IS NOT NULL")->fetchColumn();
+            } catch(PDOException $e) { $cnt_mms = '?'; $cnt_hpi = '?'; }
+            ?>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">
+                <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:14px 18px;text-align:center;">
+                    <div style="font-size:28px;font-weight:800;color:#dc2626;"><?= number_format((int)$cnt_mms) ?></div>
+                    <div style="font-size:11px;color:#888;margin-top:2px;">rows to delete from monthly_market_stats</div>
+                </div>
+                <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:14px 18px;text-align:center;">
+                    <div style="font-size:28px;font-weight:800;color:#f59e0b;"><?= number_format((int)$cnt_hpi) ?></div>
+                    <div style="font-size:11px;color:#888;margin-top:2px;">rows to update in neighbourhood_hpi_history</div>
+                </div>
+            </div>
+
+            <!-- Confirmation form -->
+            <form method="POST" onsubmit="return confirm('Are you absolutely sure? This cannot be undone. You will need to re-upload clean Paragon sold data after this.');">
+                <input type="hidden" name="confirm_market_reset" value="1">
+                <button type="submit" style="background:#dc2626;color:#fff;border:none;padding:12px 28px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:8px;">
+                    <i class="fas fa-trash-alt"></i> Confirm Reset — Delete Wrong Market Data
+                </button>
+                <div style="font-size:11px;color:#aaa;margin-top:8px;">After resetting, go to Plex Data → Market Prices and upload your clean Paragon sold CSV.</div>
+            </form>
+
+        </div>
+    </div>
+</div>
+
+
     <p style="font-size:13px;color:#888;margin:0;">All COV open data, TransLink, and constraint imports in one place.</p>
 </div>
 

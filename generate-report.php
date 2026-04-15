@@ -68,13 +68,17 @@ $r->execute([$dev_id]);
 if ((int)$r->fetchColumn() >= $daily_limit) die('Daily report limit reached ('.$daily_limit.'/day). Contact Wynston for higher limits.');
 
 // ── Developer ─────────────────────────────────────────────────────────────────
-$ds = $pdo->prepare("SELECT id,email,full_name,subscription_tier,report_logo_path,report_bio,report_title FROM developers WHERE id=?");
+$ds = $pdo->prepare("SELECT id,email,full_name,subscription_tier,report_logo_path,report_bio,report_title,company_name,phone FROM developers WHERE id=?");
 $ds->execute([$dev_id]); $developer = $ds->fetch();
 if (!$developer) die('Account not found.');
-$agent_name  = !empty($developer['full_name']) ? $developer['full_name'] : 'Tam Nguyen';
-$agent_bio   = $developer['report_bio']   ?? 'Wynston specializes in missing middle multiplex development intelligence for Metro Vancouver.';
-$agent_title = $developer['report_title'] ?? 'Realtor® · Wynston Concierge Real Estate';
-$sub_tier    = $developer['subscription_tier'] ?? 'free';
+$agent_name    = !empty($developer['full_name']) ? $developer['full_name'] : 'Tam Nguyen';
+$agent_bio     = $developer['report_bio']   ?? 'Wynston specializes in missing middle multiplex development intelligence for Metro Vancouver.';
+$agent_title   = $developer['report_title'] ?? 'Realtor® · Wynston Concierge Real Estate';
+$sub_tier      = $developer['subscription_tier'] ?? 'free';
+$company_name  = trim($developer['company_name'] ?? '');
+$agent_phone   = trim($developer['phone'] ?? '');
+$agent_email   = trim($developer['email'] ?? '');
+// $agent_website = trim($developer['website'] ?? ''); // TODO: add website column to developers table
 
 // ── Lot ───────────────────────────────────────────────────────────────────────
 // Read ALL constraint fields directly from plex_properties (the same source
@@ -175,19 +179,38 @@ $conf_short  = $comp_count>=5 ? 'High' : ($comp_count>=2 ? 'Moderate' : 'Indicat
 
 // ── DOM ───────────────────────────────────────────────────────────────────────
 $dom_data=[];
-foreach(['duplex','detached'] as $dt) {
+foreach(['duplex'] as $dt) {
     try {
         $d2=$pdo->prepare("SELECT dom_{$dt} as v FROM neighbourhood_hpi_history WHERE neighbourhood_id=(SELECT id FROM neighbourhoods WHERE slug=? LIMIT 1) AND dom_{$dt}>0 ORDER BY month_year DESC LIMIT 2");
         $d2->execute([$nb_slug]); $rows=$d2->fetchAll();
         $curr=!empty($rows[0])?(int)$rows[0]['v']:null; $prev=!empty($rows[1])?(int)$rows[1]['v']:null;
         $diff=($curr&&$prev)?$curr-$prev:null;
-        $dom_data[$dt]=['current'=>$curr,'diff'=>$diff,'arrow'=>$diff===null?'—':($diff<-1?'↓':($diff>1?'↑':'→')),'signal'=>$diff===null?'No data':($diff<-1?'Accelerating':($diff>1?'Slowing':'Stable'))];
-    } catch(PDOException $e){ $dom_data[$dt]=['current'=>null,'diff'=>null,'arrow'=>'—','signal'=>'No data']; }
+        $dom_data[$dt]=['current'=>$curr,'diff'=>$diff,'arrow'=>$diff===null?'—':($diff<-1?'↓':($diff>1?'↑':'→')),'signal'=>$diff===null?'No data':($diff<-1?'Accelerating':($diff>1?'Slowing':'Stable')),'label'=>'Duplex / Multiplex'];
+    } catch(PDOException $e){ $dom_data[$dt]=['current'=>null,'diff'=>null,'arrow'=>'—','signal'=>'No data','label'=>'Duplex / Multiplex']; }
 }
 
 // ── HPI ───────────────────────────────────────────────────────────────────────
+// ── HPI YoY — calculated live from monthly_market_stats uploads ──────────────
 $hpi_yoy=null;
-try { $hs=$pdo->prepare("SELECT hpi_change_yoy FROM neighbourhood_hpi_history WHERE neighbourhood_id=(SELECT id FROM neighbourhoods WHERE slug=? LIMIT 1) ORDER BY month_year DESC LIMIT 1"); $hs->execute([$nb_slug]); $hr=$hs->fetch(); if($hr) $hpi_yoy=(float)$hr['hpi_change_yoy']; } catch(PDOException $e){}
+try {
+    $h_cur=$pdo->prepare("SELECT price_per_sqft, data_month FROM monthly_market_stats WHERE neighbourhood_slug=? AND is_active=1 AND csv_type IN('hpi_duplex','duplex') AND price_per_sqft>0 ORDER BY data_month DESC LIMIT 1");
+    $h_cur->execute([$nb_slug]); $h_cur_row=$h_cur->fetch();
+    if ($h_cur_row && $h_cur_row['price_per_sqft']>0) {
+        $cur_psf   = (float)$h_cur_row['price_per_sqft'];
+        $cur_month = $h_cur_row['data_month'];
+        $h_prev=$pdo->prepare("SELECT price_per_sqft FROM monthly_market_stats WHERE neighbourhood_slug=? AND is_active=1 AND csv_type IN('hpi_duplex','duplex') AND price_per_sqft>0 AND data_month BETWEEN DATE_SUB(?,INTERVAL 15 MONTH) AND DATE_SUB(?,INTERVAL 9 MONTH) ORDER BY data_month DESC LIMIT 1");
+        $h_prev->execute([$nb_slug,$cur_month,$cur_month]); $h_prev_row=$h_prev->fetch();
+        if ($h_prev_row && $h_prev_row['price_per_sqft']>0) {
+            $hpi_yoy = round((((float)$h_cur_row['price_per_sqft']-(float)$h_prev_row['price_per_sqft'])/(float)$h_prev_row['price_per_sqft'])*100,1);
+        }
+    }
+    // Fallback to neighbourhood_hpi_history if not enough monthly_market_stats history
+    if ($hpi_yoy===null) {
+        $hs=$pdo->prepare("SELECT hpi_change_yoy FROM neighbourhood_hpi_history WHERE neighbourhood_id=(SELECT id FROM neighbourhoods WHERE slug=? LIMIT 1) AND hpi_change_yoy IS NOT NULL AND hpi_change_yoy!=0 ORDER BY month_year DESC LIMIT 1");
+        $hs->execute([$nb_slug]); $hr=$hs->fetch();
+        if($hr && $hr['hpi_change_yoy']!==null) $hpi_yoy=(float)$hr['hpi_change_yoy'];
+    }
+} catch(PDOException $e){}
 
 // ── Comps ─────────────────────────────────────────────────────────────────────
 $cs=$pdo->prepare("SELECT address,data_month,sqft,price_per_sqft,days_on_market,csv_type FROM monthly_market_stats WHERE neighbourhood_slug=? AND is_active=1 AND csv_type IN('duplex','detached') AND yr_blt>=2024 ORDER BY data_month DESC LIMIT 5");
@@ -400,6 +423,14 @@ elseif ($elig_label==='4-Unit Eligible') $next_step="This lot qualifies for a 4-
 elseif ($elig_label==='Duplex / 3-Unit') $next_step="This lot qualifies for a duplex or 3-unit build. Consider neighbour buyout to unlock higher density.";
 else $next_step="This lot does not meet current minimums. Contact Wynston to discuss assembly strategies.";
 
+// ── Report type labels ────────────────────────────────────────────────────────
+$report_type_label = $pro_forma_path === 'rental'  ? 'Secured Rental Report'      :
+                    ($pro_forma_path === 'outlook' ? 'Comparative Strategy Report' :
+                                                     'Multiplex Sale Report');
+$cover_report_title = !empty($company_name)
+    ? htmlspecialchars($company_name).' — '.htmlspecialchars($report_type_label)
+    : htmlspecialchars($report_type_label);
+
 // ── Agent logo ─────────────────────────────────────────────────────────────────
 $logo_b64=''; $logo_mime='image/png';
 $lp=$developer['report_logo_path']??null;
@@ -434,7 +465,7 @@ function sign($n) { return $n>=0?'+':'-'; }
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Wynston Report — <?= htmlspecialchars($address) ?></title>
+<title><?= htmlspecialchars($report_type_label) ?> — <?= htmlspecialchars($address) ?></title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif:ital,wght@0,400;0,600;0,700;1,400;1,700&family=Work+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -902,7 +933,7 @@ table.dt tr:last-child td{border-bottom:none}
 <div class="page cover">
 <div class="cover-inner">
 
-    <div class="cover-wordmark">WYNSTON — <?= $pro_forma_path==='rental' ? 'Secured Rental Analysis' : ($pro_forma_path==='outlook' ? 'Development Path Comparison' : 'Intelligent Navigator') ?></div>
+    <div class="cover-wordmark"><?= $cover_report_title ?></div>
 
     <div class="cover-address-block">
         <div class="cover-address-label">Subject Property</div>
@@ -1300,7 +1331,7 @@ table.dt tr:last-child td{border-bottom:none}
     <tbody>
         <?php foreach($dom_data as $dt=>$dd): ?>
         <tr>
-            <td style="font-weight:500"><?= ucfirst($dt) ?></td>
+            <td style="font-weight:500"><?= htmlspecialchars($dd['label'] ?? ucfirst($dt)) ?></td>
             <td class="dt-mono"><?= $dd['current']!==null?$dd['current'].' days':'—' ?></td>
             <td><?= $dd['diff']!==null?($dd['diff']<0?'↓ '.abs($dd['diff']).' days faster':($dd['diff']>0?'↑ '.$dd['diff'].' days slower':'Stable')):'—' ?></td>
             <td class="<?= $dd['diff']!==null&&$dd['diff']<-1?'dt-pass':($dd['diff']!==null&&$dd['diff']>1?'dt-warn':'dt-neutral') ?>">
@@ -1310,7 +1341,7 @@ table.dt tr:last-child td{border-bottom:none}
         <?php endforeach; ?>
         <?php if(!is_null($hpi_yoy)): ?>
         <tr>
-            <td style="font-weight:500">HPI Year-over-Year</td>
+            <td style="font-weight:500">Duplex / Multiplex — $/sqft YoY</td>
             <td class="dt-mono" colspan="2"><?= $hpi_yoy>=0?'+':'' ?><?= pct($hpi_yoy) ?></td>
             <td class="<?= $hpi_yoy>=0?'dt-pass':'dt-warn' ?>"><?= $hpi_yoy>=0?'Appreciating':'Declining' ?></td>
         </tr>
@@ -1403,8 +1434,8 @@ table.dt tr:last-child td{border-bottom:none}
 
 <!-- Right: unit mix + donut chart -->
 <div>
-    <div class="pf-section-title">Unit Mix — Vancouver 2026 Bedroom Rules</div>
-    <table class="dt" style="margin:0 0 20px">
+    <div class="pf-section-title">Unit Mix — Vancouver Bedroom Requirements</div>
+    <table class="dt" style="margin:0 0 8px">
         <thead><tr><th>#</th><th>Type</th><th>Est. Sqft</th><th style="text-align:right">Projected Sale</th></tr></thead>
         <tbody>
         <?php foreach($unit_mix as $i=>$u): ?>
@@ -1412,6 +1443,9 @@ table.dt tr:last-child td{border-bottom:none}
         <?php endforeach; ?>
         </tbody>
     </table>
+    <div style="font-size:9px;color:var(--on-surface-var);line-height:1.6;margin-bottom:12px;padding:7px 10px;background:var(--surface-low);border-left:2px solid var(--outline-variant)">
+        Based on <strong>Vancouver SSMUH / Bill 44 bedroom requirements</strong>: 6-unit builds require ≥3 units with 2+ bedrooms; 4-unit builds require ≥2 units with 2+ bedrooms. Unit sizes are proportional to bedroom weight (1BR=0.75×, 2BR=1.00×, 3BR=1.35×) applied to total saleable area. Projected sale = estimated sqft × avg sold $/sqft. Estimate only — verify with your architect.
+    </div>
 
     <?php
     // Count units by bedroom type for donut
@@ -1606,8 +1640,188 @@ table.dt tr:last-child td{border-bottom:none}
 </div>
 </div><!-- /page 5b-2 financing -->
 
-<?php else: // outlook — comparison report ?>
-<!-- ───────────────── PAGE 5C — COMPARISON: STRATA VS RENTAL ───────────────── -->
+<?php else: // outlook — comparative strategy report: strata + rental + financing + comparison ?>
+
+<!-- ───────────────── PAGE 5A (OUTLOOK) — STRATA PRO FORMA ───────────────── -->
+<div class="page">
+<div class="page-header">
+    <div class="page-header-title">Development Pro Forma.</div>
+    <div class="page-header-meta">Strata Ownership · 0.70 FSR · <?= $max_units ?>-unit · <?= htmlspecialchars($nb_display) ?></div>
+</div>
+<div class="page-body">
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:40px">
+<div>
+    <div class="pf-section-title">Project Costs — Strata Path</div>
+    <div class="pf-line"><span class="pf-label">Land — BC Assessment <?= $assessment_year ?></span><span class="pf-val"><?= money($assessed_land) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">Hard build (<?= number_format($strata_buildable_sqft) ?> sqft × <?= money($build_psf) ?>/sqft)</span><span class="pf-val"><?= money($s_hard_build) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">City-wide DCL</span><span class="pf-val"><?= money($s_dcl_city) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">Utilities DCL</span><span class="pf-val"><?= money($s_dcl_util) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">Metro DCC</span><span class="pf-val"><?= money($s_metro_dcc) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">Permit fees</span><span class="pf-val"><?= money($s_permit_fees) ?></span></div>
+    <?php if($peat_zone): ?><div class="pf-line indent"><span class="pf-label" style="color:#b45309">Peat zone contingency</span><span class="pf-val">$150,000</span></div><?php endif; ?>
+    <div class="pf-total-bar"><span class="pf-total-label">Total Project Cost</span><span class="pf-total-val"><?= money($s_total_cost) ?></span></div>
+    <div class="pf-section-title" style="margin-top:20px">Exit Value — Strata Sale</div>
+    <div class="pf-line"><span class="pf-label">Saleable area (<?= number_format($strata_buildable_sqft) ?> sqft × 85%)</span><span class="pf-val"><?= number_format(round($s_saleable)) ?> sqft</span></div>
+    <div class="pf-line"><span class="pf-label">Avg $/sqft (<?= htmlspecialchars($conf_short) ?> confidence)</span><span class="pf-val"><?= money($current_psf) ?>/sqft</span></div>
+    <div class="pf-total-bar"><span class="pf-total-label">Total Exit Value</span><span class="pf-total-val"><?= money($s_exit_value) ?></span></div>
+    <div class="profit-block <?= $s_profit>=0?'positive':'negative' ?>" style="margin-top:16px">
+        <div><div class="profit-label">Estimated Profit</div><div class="profit-sub">Before tax &amp; professional fees</div></div>
+        <div class="profit-val <?= $s_profit>=0?'positive':'negative' ?>"><?= $s_profit<0?'−':'' ?><?= money(abs($s_profit)) ?></div>
+    </div>
+    <div style="display:flex;gap:24px;margin-top:8px;font-size:11px;color:var(--on-surface-var)">
+        <span>ROI: <strong style="color:var(--on-surface)"><?= pct($s_roi) ?></strong></span>
+        <span>Per unit: <strong style="color:var(--on-surface)"><?= money($s_profit/max($max_units,1)) ?></strong></span>
+    </div>
+</div>
+<div>
+    <div class="pf-section-title">Unit Mix — Vancouver Bedroom Requirements</div>
+    <table class="dt" style="margin:0 0 8px">
+        <thead><tr><th>#</th><th>Type</th><th>Est. Sqft</th><th style="text-align:right">Projected Sale</th></tr></thead>
+        <tbody>
+        <?php foreach($unit_mix as $i=>$u): ?>
+        <tr><td style="color:var(--on-surface-var)"><?= $i+1 ?></td><td><?= $u['br'] ?>BR</td><td><?= number_format($u['sqft']) ?> sqft</td><td style="text-align:right;font-weight:500"><?= money($u['price']) ?></td></tr>
+        <?php endforeach; ?>
+        </tbody>
+    </table>
+    <div style="font-size:9px;color:var(--on-surface-var);line-height:1.6;margin-bottom:12px;padding:7px 10px;background:var(--surface-low);border-left:2px solid var(--outline-variant)">
+        Based on <strong>Vancouver SSMUH / Bill 44 bedroom requirements</strong>: 6-unit builds require ≥3 units with 2+ bedrooms; 4-unit builds require ≥2 units with 2+ bedrooms. Unit sizes are proportional to bedroom weight (1BR=0.75×, 2BR=1.00×, 3BR=1.35×) applied to total saleable area. Estimate only — verify with your architect.
+    </div>
+    <?php
+    $br_counts=[1=>0,2=>0,3=>0];
+    foreach($unit_mix as $u) $br_counts[$u['br']]++;
+    $total_u=count($unit_mix);
+    $circumference=2*M_PI*70;
+    $donut_colors=['#000a1e','#c9a84c','#8da3c0'];
+    $donut_labels=['2 Bedroom','1 Bedroom','3 Bedroom'];
+    $donut_vals=[$br_counts[2],$br_counts[1],$br_counts[3]];
+    $offset=0; $segs=[];
+    foreach($donut_vals as $i=>$v){
+        $p=$total_u>0?$v/$total_u:0; $d=$p*$circumference; $g=$circumference-$d;
+        $segs[]=[$d,$g,$offset,$donut_colors[$i],$donut_labels[$i],$v,$p]; $offset+=$d;
+    }
+    ?>
+    <svg viewBox="0 0 200 200" style="width:140px;height:140px;display:block;margin:0 auto 12px">
+        <?php foreach($segs as $s): if($s[5]===0)continue; ?>
+        <circle cx="100" cy="100" r="70" fill="none" stroke="<?=$s[3]?>" stroke-width="28"
+            stroke-dasharray="<?=$s[0]?> <?=$s[1]?>" stroke-dashoffset="-<?=$s[2]?>"
+            transform="rotate(-90 100 100)"/>
+        <?php endforeach; ?>
+        <text x="100" y="96" text-anchor="middle" font-family="Noto Serif,serif" font-size="28" font-weight="700" fill="#000a1e"><?=$total_u?></text>
+        <text x="100" y="112" text-anchor="middle" font-family="Work Sans,sans-serif" font-size="7" letter-spacing="1" fill="#2d3a52">TOTAL UNITS</text>
+    </svg>
+    <div style="display:flex;flex-direction:column;gap:4px;font-size:10px">
+        <?php foreach($segs as $s): if($s[5]===0)continue; ?>
+        <div style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;background:<?=$s[3]?>;display:inline-block;flex-shrink:0"></span><?=$s[4]?> (<?=round($s[6]*100)?>%)</div>
+        <?php endforeach; ?>
+    </div>
+</div>
+</div>
+</div>
+</div><!-- /page 5a outlook strata -->
+
+<!-- ───────────────── PAGE 5B (OUTLOOK) — RENTAL INCOME ANALYSIS ───────────────── -->
+<div class="page">
+<div class="page-header">
+    <div class="page-header-title">Rental Income Analysis.</div>
+    <div class="page-header-meta">Secured Rental · 1.00 FSR · <?= $rental_units ?> units · <?= htmlspecialchars($nb_display) ?></div>
+</div>
+<div class="page-body tight">
+<div class="label-xs" style="margin-bottom:12px">Rental Income by Bedroom Type</div>
+<table class="dt" style="margin-bottom:20px">
+    <thead><tr><th>Type</th><th>Units</th><th>Market Rent</th><th>Monthly Total</th><th>CMHC Benchmark</th><th>Variance</th></tr></thead>
+    <tbody>
+    <?php foreach($rental_rows as $rr):
+        $var=$rr['cmhc']>0?(($rr['curr']-$rr['cmhc'])/$rr['cmhc'])*100:0;
+        $row_total=$rr['curr']*$rr['units'];
+    ?>
+    <tr>
+        <td style="font-weight:600"><?= $rr['t'] ?></td>
+        <td style="color:var(--on-surface-var)"><?= $rr['units'] ?></td>
+        <td><?= money($rr['curr']) ?>/mo</td>
+        <td style="font-weight:500"><?= money($row_total) ?>/mo</td>
+        <td><?= money($rr['cmhc']) ?>/mo</td>
+        <td class="<?= $var>2?'dt-pass':($var<-2?'dt-warn':'dt-neutral') ?>"><?= $var>=0?'+':'' ?><?= pct($var) ?></td>
+    </tr>
+    <?php endforeach; ?>
+    </tbody>
+</table>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:32px;margin-bottom:20px">
+<div>
+    <div class="pf-section-title">Income Waterfall</div>
+    <div class="pf-line"><span class="pf-label">Gross monthly income</span><span class="pf-val"><?= money($r_gross_monthly) ?></span></div>
+    <div class="pf-line"><span class="pf-label">Annual gross income</span><span class="pf-val"><?= money($r_gross_annual) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">Less vacancy (<?= round($fa_vacancy*100,1) ?>%)</span><span class="pf-val" style="color:#b45309">−<?= money($r_gross_annual*$fa_vacancy) ?></span></div>
+    <div class="pf-total-bar"><span class="pf-total-label">Effective Gross Income (EGI)</span><span class="pf-total-val"><?= money($r_egi) ?>/yr</span></div>
+</div>
+<div>
+    <div class="pf-section-title">Operating Expenses</div>
+    <div class="pf-line"><span class="pf-label">Property management (<?= round($fa_mgmt*100) ?>%)</span><span class="pf-val"><?= money($r_mgmt_fee) ?></span></div>
+    <div class="pf-line"><span class="pf-label">Property tax</span><span class="pf-val"><?= money($r_prop_tax) ?></span></div>
+    <div class="pf-line"><span class="pf-label">Building insurance</span><span class="pf-val"><?= money($r_insurance) ?></span></div>
+    <div class="pf-line"><span class="pf-label">Maintenance &amp; repairs</span><span class="pf-val"><?= money($r_maint) ?></span></div>
+    <div class="pf-total-bar"><span class="pf-total-label">Total Operating Expenses</span><span class="pf-total-val"><?= money($r_total_opex) ?>/yr</span></div>
+</div>
+</div>
+<div class="margin-callout" style="background:var(--primary)">
+    <div style="font-size:12px;color:rgba(255,255,255,.6)">Net Operating Income (NOI) = EGI − Operating Expenses</div>
+    <div style="font-family:'Noto Serif',serif;font-size:28px;color:var(--tertiary-fixed)"><?= money($r_noi) ?>/yr</div>
+</div>
+</div>
+</div><!-- /page 5b outlook rental income -->
+
+<!-- ───────────────── PAGE 5B-2 (OUTLOOK) — CMHC MLI SELECT FINANCING ───────────────── -->
+<div class="page">
+<div class="page-header">
+    <div class="page-header-title"><?= htmlspecialchars($fa_name) ?> Financing.</div>
+    <div class="page-header-meta"><?= number_format($fa_ltc*100) ?>% LTC · <?= number_format($fa_rate*100,2) ?>% interest · <?= $fa_amort ?>-yr amortization</div>
+</div>
+<div class="page-body">
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:32px;margin-bottom:24px">
+<div>
+    <div class="pf-section-title">Project Costs — Rental Path (1.00 FSR)</div>
+    <div class="pf-line"><span class="pf-label">Land — BC Assessment <?= $assessment_year ?></span><span class="pf-val"><?= money($assessed_land) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">Hard build (<?= number_format($rental_buildable_sqft) ?> sqft × <?= money($build_psf) ?>/sqft)</span><span class="pf-val"><?= money($r_hard_build) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">Density bonus</span><span class="pf-val"><?= money($r_density_bonus) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">DCLs &amp; permit fees</span><span class="pf-val"><?= money($r_dcl_city+$r_dcl_util+$r_metro_dcc+$r_permit_fees) ?></span></div>
+    <?php if($peat_zone): ?><div class="pf-line indent"><span class="pf-label" style="color:#b45309">Peat contingency</span><span class="pf-val">$150,000</span></div><?php endif; ?>
+    <div class="pf-total-bar"><span class="pf-total-label">Total Project Cost</span><span class="pf-total-val"><?= money($r_total_cost) ?></span></div>
+</div>
+<div>
+    <div class="pf-section-title"><?= htmlspecialchars($fa_name) ?> Loan Structure</div>
+    <div class="pf-line"><span class="pf-label">Base loan (<?= number_format($fa_ltc*100) ?>% LTC)</span><span class="pf-val"><?= money($r_loan_base) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">CMHC premium (<?= number_format($fa_ins_prem*100) ?>%)</span><span class="pf-val"><?= money($r_ins_amount) ?></span></div>
+    <div class="pf-total-bar"><span class="pf-total-label">Total Insured Loan</span><span class="pf-total-val"><?= money($r_loan_total) ?></span></div>
+    <div class="pf-line" style="margin-top:8px"><span class="pf-label">Equity required (<?= number_format((1-$fa_ltc)*100) ?>%)</span><span class="pf-val" style="font-weight:700"><?= money($r_equity) ?></span></div>
+    <div class="pf-line"><span class="pf-label">Monthly mortgage payment</span><span class="pf-val" style="font-weight:700"><?= money($r_monthly_pmt) ?>/mo</span></div>
+    <div class="pf-line"><span class="pf-label">Annual debt service</span><span class="pf-val" style="font-weight:700"><?= money($r_annual_debt) ?>/yr</span></div>
+</div>
+</div>
+<div class="label-xs" style="margin-bottom:12px">Investor Return Metrics</div>
+<div style="display:grid;grid-template-columns:repeat(4,1fr);background:var(--surface-low);margin-bottom:20px">
+    <div class="metric-cell"><div class="label-xs">Annual Cash Flow</div><div class="metric-val" style="font-size:22px;color:<?= $r_cash_flow>=0?'var(--success)':'#ba1a1a' ?>"><?= $r_cash_flow<0?'−':'' ?><?= money(abs($r_cash_flow)) ?></div><div class="metric-sub">NOI − debt service</div></div>
+    <div class="metric-cell"><div class="label-xs">Cash-on-Cash Return</div><div class="metric-val" style="font-size:22px"><?= pct($r_coc_return) ?></div><div class="metric-sub">on <?= money($r_equity) ?> equity</div></div>
+    <div class="metric-cell"><div class="label-xs">Cap Rate</div><div class="metric-val" style="font-size:22px"><?= pct($r_cap_rate) ?></div><div class="metric-sub">NOI ÷ total cost</div></div>
+    <div class="metric-cell"><div class="label-xs">Payback Period</div><div class="metric-val" style="font-size:22px"><?= round($r_payback,1) ?> <span style="font-size:14px">yrs</span></div><div class="metric-sub">total cost ÷ NOI</div></div>
+</div>
+<div style="background:var(--primary);padding:20px 24px;display:grid;grid-template-columns:1fr 1fr;gap:32px;margin-bottom:16px">
+    <div>
+        <div style="font-size:9px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:8px">Stabilised Asset Value</div>
+        <div style="font-family:'Noto Serif',serif;font-size:32px;color:var(--tertiary-fixed)"><?= money($r_asset_value) ?></div>
+        <div style="font-size:11px;color:rgba(255,255,255,.4);margin-top:4px">NOI ÷ <?= number_format($fa_cap_rate*100,2) ?>% market cap rate</div>
+    </div>
+    <div>
+        <div style="font-size:9px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:8px">Day-1 Equity Position</div>
+        <div style="font-family:'Noto Serif',serif;font-size:32px;color:<?= $r_value_vs_cost>=0?'#4ade80':'#f87171' ?>"><?= $r_value_vs_cost>=0?'+':'' ?><?= money($r_value_vs_cost) ?></div>
+        <div style="font-size:11px;color:rgba(255,255,255,.4);margin-top:4px">Asset value vs total project cost</div>
+    </div>
+</div>
+<div class="callout warn" style="font-size:11px">
+    <strong>Section 219 Rental Covenant:</strong> The 1.00 FSR density bonus is conditional on rental tenure (typically 60 years). Individual unit sales prohibited while covenant is in force. Building may be sold as a single income-producing asset.
+</div>
+</div>
+</div><!-- /page 5b-2 outlook financing -->
+
+<!-- ───────────────── PAGE 5C — PATH COMPARISON ───────────────── -->
 <div class="page">
 <div class="page-header">
     <div class="page-header-title">Path Comparison.</div>
@@ -1975,21 +2189,41 @@ $bars = [
 <div class="page">
 <div class="back-cover">
 
-    <div class="back-logo">WYNSTON</div>
-    <div class="back-tagline">Intelligent Navigator · W.I.N · wynston.ca</div>
+    <!-- TOP: Company name where WYNSTON was, website where tagline was -->
+    <div class="back-logo"><?= !empty($company_name) ? htmlspecialchars($company_name) : htmlspecialchars($agent_name) ?></div>
+    <div class="back-tagline">
+        <?php if(!empty($agent_email)): ?><?= htmlspecialchars($agent_email) ?><?php endif; ?>
+        <?php if(!empty($agent_phone)): ?> · <?= htmlspecialchars($agent_phone) ?><?php endif; ?>
+        <!-- TODO: add website column to developers table, then show here -->
+    </div>
 
+    <!-- Divider + agent block — layout matches screenshot exactly -->
     <div class="back-agent-block">
         <?php if(!empty($logo_b64)): ?>
-        <img class="back-logo-img" src="data:<?= $logo_mime ?>;base64,<?= $logo_b64 ?>" alt="<?= htmlspecialchars($agent_name) ?>">
+        <img class="back-logo-img" src="data:<?= $logo_mime ?>;base64,<?= $logo_b64 ?>"
+             alt="<?= htmlspecialchars($company_name ?: $agent_name) ?>">
         <?php else: ?>
         <div class="back-logo-ph"></div>
         <?php endif; ?>
-        <div>
+        <div style="flex:1">
             <div class="back-agent-name"><?= htmlspecialchars($agent_name) ?></div>
+            <?php if(!empty($agent_title)): ?>
             <div class="back-agent-title"><?= htmlspecialchars($agent_title) ?></div>
+            <?php endif; ?>
+            <?php if(!empty($agent_bio)): ?>
             <div class="back-agent-bio"><?= htmlspecialchars($agent_bio) ?></div>
+            <?php endif; ?>
             <div class="back-contacts" style="margin-top:14px">
-                <div class="back-contact-line"><span>Web</span>wynston.ca · Vancouver, BC</div>
+                <?php if(!empty($agent_email)): ?>
+                <div class="back-contact-line"><span>Email</span><?= htmlspecialchars($agent_email) ?></div>
+                <?php endif; ?>
+                <?php if(!empty($agent_phone)): ?>
+                <div class="back-contact-line"><span>Phone</span><?= htmlspecialchars($agent_phone) ?></div>
+                <?php endif; ?>
+                <?php if(!empty($company_name)): ?>
+                <div class="back-contact-line"><span>Company</span><?= htmlspecialchars($company_name) ?></div>
+                <?php endif; ?>
+                <!-- TODO: <div class="back-contact-line"><span>Web</span><?= htmlspecialchars($agent_website) ?></div> -->
                 <div class="back-contact-line"><span>Report</span><?= $report_id ?> · Generated <?= date('F j, Y') ?></div>
             </div>
         </div>
@@ -2002,7 +2236,7 @@ $bars = [
     </div>
 
     <?php if($in_floodplain||$peat_zone||($heritage!=='none')||$covenant_present||$easement_present): ?>
-    <div style="margin-top:16px;padding:16px 20px;background:rgba(186,26,26,.15);border-left:2px solid rgba(186,26,26,.5);font-size:11px;color:rgba(255,255,255,.7);line-height:1.6;flex-shrink:0">
+    <div style="margin-top:16px;padding:14px 18px;background:rgba(186,26,26,.15);border-left:2px solid rgba(186,26,26,.5);font-size:11px;color:rgba(255,255,255,.7);line-height:1.6;flex-shrink:0">
         <strong style="color:rgba(255,255,255,.9)">Active Constraints:</strong>
         <?php
         $flags=[];
@@ -2019,8 +2253,10 @@ $bars = [
     <div class="back-sources">
         <div class="back-sources-label">Data Sources</div>
         <div class="back-sources-text">REBGV MLS (new builds 2024+) · City of Vancouver Open Data · BC Assessment · TransLink GTFS · CMHC · BC Stats BCPI · Stats Canada Census (2021) · RBC / TD / BMO / BCREA / RE/MAX / Royal LePage institutional forecasts</div>
-        <div class="back-disclaimer">This report is prepared by Wynston Concierge Real Estate for informational purposes only. It does not constitute financial, investment, legal, or real estate advice. All data sourced from publicly available datasets and proprietary market intelligence. Pro forma figures are estimates only and subject to change. Past performance does not guarantee future results. Always consult a licensed professional before making investment decisions. © Wynston Concierge Real Estate <?= date('Y') ?>. Report ID: <?= $report_id ?>.</div>
-        <div style="font-size:10px;color:rgba(255,255,255,.25);margin-top:8px">Construction mortgage professionals: contact Wynston for project-specific data packages.</div>
+        <div class="back-disclaimer">This report has been prepared by <?= htmlspecialchars(!empty($company_name) ? $company_name : $agent_name) ?> for informational purposes only. It does not constitute financial, investment, legal, or real estate advice. All market intelligence and feasibility data is sourced from publicly available datasets and proprietary analytical models. Pro forma figures are estimates only and subject to change without notice. Past performance does not guarantee future results. Always consult a licensed professional before making investment decisions. © <?= date('Y') ?> <?= htmlspecialchars(!empty($company_name) ? $company_name : $agent_name) ?>. Report ID: <?= $report_id ?>.</div>
+        <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.08);font-size:9px;color:rgba(255,255,255,.2);letter-spacing:.05em">
+            Powered by <strong style="color:rgba(255,255,255,.35)">W.I.N — Wynston Intelligent Navigator</strong> · wynston.ca
+        </div>
     </div>
 
     <div class="back-gold-bar"></div>
