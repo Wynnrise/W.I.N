@@ -4,6 +4,39 @@
  * Gate 2 JSON endpoint — full feasibility data for side panel.
  * All secondary table queries wrapped in try/catch so empty/missing
  * tables never kill the endpoint — they return null/defaults instead.
+ *
+ * Override URL params supported (all optional):
+ *   STRATA (Session 08, preserved):
+ *     land_override        — manual land cost override ($)
+ *     build_psf_override   — manual build $/sqft override
+ *     psf_override         — manual avg sold $/sqft override
+ *     psf_mode             — 'duplex' (default) | 'detached'  (HPI toggle)
+ *
+ *   STRATA CONSTRUCTION FINANCING:
+ *     strata_cfin_ltc      — 0.00 to 0.85 (fraction, e.g. 0.65 = 65%)
+ *     strata_cfin_rate     — annual interest rate as fraction (0.07 = 7%)
+ *     strata_cfin_term     — months (e.g. 15)
+ *     strata_all_cash      — '1' or 'true' → zero out strata construction financing (Session 16)
+ *
+ *   RENTAL (editable panel):
+ *     rental_land_override     — manual land cost override for rental path (independent from strata)
+ *     rental_build_psf_override — manual build $/sqft override for rental path
+ *
+ *   RENTAL FINANCING SCENARIO (Session B):
+ *     financing_scenario       — 'cmhc_mli' (default) | 'conventional' | 'private' | 'all_cash'
+ *     fin_ltc                  — override LTC as fraction (e.g. 0.70 = 70%)
+ *     fin_rate                 — override interest rate as fraction (e.g. 0.06 = 6%)
+ *     fin_amort                — override amortization in years (e.g. 30)
+ *     fin_premium              — override insurance premium as fraction (e.g. 0.04 = 4%)
+ *
+ *   RENTAL (existing):
+ *     vacancy_override         — decimal (e.g. 0.08 = 8%)
+ *     op_expense_override      — decimal (e.g. 0.28 = 28%)
+ *     density_bonus_override   — $/sqft on bonus area
+ *     rent_1br_override        — $/mo, bypasses weighted midpoint
+ *     rent_2br_override        — $/mo
+ *     rent_3br_override        — $/mo
+ *     market_cap_rate_override — decimal (e.g. 0.042 = 4.2%)
  */
 
 require_once __DIR__ . '/../dev-auth.php';
@@ -18,6 +51,7 @@ if (!isset($_SESSION['dev_id'])) {
 }
 
 header('Content-Type: application/json');
+header('Cache-Control: no-store');
 
 $pid  = trim($_GET['pid']  ?? '');
 $path = trim($_GET['path'] ?? 'strata');
@@ -63,40 +97,126 @@ try {
     $stmt->execute([$slug]);
     $costs = $stmt->fetch(PDO::FETCH_ASSOC);
     if ($costs && $costs['cost_standard_low']) {
-        // Use midpoint of standard low/high
         $build_cost_psf = ((float)$costs['cost_standard_low'] + (float)$costs['cost_standard_high']) / 2;
     }
 } catch (PDOException $e) {}
 
-// ── 3. Market stats — REBGV sold $/sqft ──────────────────────
-// Queries monthly_market_stats by COV neighbourhood_slug.
-// csv_type 'hpi_duplex' = from Python pipeline (neighbourhood-level median)
-// csv_type 'duplex'     = from individual transaction CSV (Paragon sold)
-// Both types are valid — hpi_duplex preferred (more complete coverage)
+// ── 3. Market stats — REBGV sold duplex $/sqft (used in pro forma) ───────────
 $market_sold = null;
+$market_window = 'none';
+
 try {
     $stmt = $pdo->prepare("
         SELECT
-            AVG(price_per_sqft)  AS avg_sold_psf_duplex,
-            COUNT(*)             AS sales_count,
-            MAX(data_month)      AS data_month,
-            MAX(days_on_market)  AS dom_duplex
+            SUM(avg_sold_psf_duplex * sales_count_duplex) / NULLIF(SUM(sales_count_duplex),0) AS avg_sold_psf_duplex,
+            SUM(sales_count_duplex)    AS sales_count,
+            MAX(data_month)            AS data_month,
+            MIN(data_month)            AS earliest_month,
+            AVG(days_on_market_duplex) AS dom_duplex
         FROM monthly_market_stats
         WHERE neighbourhood_slug = ?
-          AND csv_type IN ('hpi_duplex','duplex','detached')
+          AND csv_type IN ('hpi_duplex','duplex')
           AND is_active = 1
-          AND price_per_sqft > 0
-        LIMIT 1
+          AND avg_sold_psf_duplex > 0
+          AND sales_count_duplex  > 0
+          AND data_month >= DATE_SUB(CURDATE(), INTERVAL 24 MONTH)
     ");
     $stmt->execute([$slug]);
-    $market_sold = $stmt->fetch(PDO::FETCH_ASSOC);
-} catch (PDOException $e) { $market_sold = null; }
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($row && (int)$row['sales_count'] > 0) {
+        $market_sold = $row;
+        $market_window = '24mo';
+    }
+} catch (PDOException $e) {}
+
+if (!$market_sold) {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT
+                SUM(avg_sold_psf_duplex * sales_count_duplex) / NULLIF(SUM(sales_count_duplex),0) AS avg_sold_psf_duplex,
+                SUM(sales_count_duplex)    AS sales_count,
+                MAX(data_month)            AS data_month,
+                MIN(data_month)            AS earliest_month,
+                AVG(days_on_market_duplex) AS dom_duplex
+            FROM monthly_market_stats
+            WHERE neighbourhood_slug = ?
+              AND csv_type IN ('hpi_duplex','duplex')
+              AND is_active = 1
+              AND avg_sold_psf_duplex > 0
+              AND sales_count_duplex  > 0
+              AND data_month >= '2020-01-01'
+        ");
+        $stmt->execute([$slug]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($row && (int)$row['sales_count'] > 0) {
+            $market_sold = $row;
+            $market_window = 'fallback_2020';
+        }
+    } catch (PDOException $e) { $market_sold = null; }
+}
+
+// ── 3b. Detached benchmark — reference only, NOT used in any calculation ─────
+$detached_benchmark = null;
+$detached_window = 'none';
+$det_row = null;
+
+try {
+    $stmt = $pdo->prepare("
+        SELECT
+            SUM(avg_sold_psf_duplex * sales_count_duplex) / NULLIF(SUM(sales_count_duplex),0) AS avg_sold_psf_detached,
+            SUM(sales_count_duplex)    AS sales_count_detached,
+            MAX(data_month)            AS detached_data_month
+        FROM monthly_market_stats
+        WHERE neighbourhood_slug = ?
+          AND csv_type = 'detached'
+          AND is_active = 1
+          AND avg_sold_psf_duplex > 0
+          AND sales_count_duplex  > 0
+          AND data_month >= DATE_SUB(CURDATE(), INTERVAL 24 MONTH)
+    ");
+    $stmt->execute([$slug]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($row && (int)$row['sales_count_detached'] > 0) {
+        $det_row = $row; $detached_window = '24mo';
+    }
+} catch (PDOException $e) {}
+
+if (!$det_row) {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT
+                SUM(avg_sold_psf_duplex * sales_count_duplex) / NULLIF(SUM(sales_count_duplex),0) AS avg_sold_psf_detached,
+                SUM(sales_count_duplex)    AS sales_count_detached,
+                MAX(data_month)            AS detached_data_month
+            FROM monthly_market_stats
+            WHERE neighbourhood_slug = ?
+              AND csv_type = 'detached'
+              AND is_active = 1
+              AND avg_sold_psf_duplex > 0
+              AND sales_count_duplex  > 0
+              AND data_month >= '2020-01-01'
+        ");
+        $stmt->execute([$slug]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($row && (int)$row['sales_count_detached'] > 0) {
+            $det_row = $row; $detached_window = 'fallback_2020';
+        }
+    } catch (PDOException $e) { $det_row = null; }
+}
+
+if ($det_row && (float)$det_row['avg_sold_psf_detached'] > 0) {
+    $detached_benchmark = [
+        'avg_psf'     => round((float)$det_row['avg_sold_psf_detached']),
+        'sales_count' => (int)$det_row['sales_count_detached'],
+        'data_month'  => $det_row['detached_data_month'],
+        'window'      => $detached_window,
+    ];
+}
 
 // ── 3b. Rental data — all 3 sources ──────────────────────────
 $rent_livrent = null;
 $rent_rebgv   = null;
 try {
-    // liv.rent
     $stmt = $pdo->prepare("
         SELECT avg_rent_1br, avg_rent_2br, avg_rent_3br
         FROM monthly_market_stats
@@ -108,7 +228,6 @@ try {
     $stmt->execute([$slug]);
     $rent_livrent = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
 
-    // REBGV rental (also check old 'rental' type for backward compat)
     $stmt = $pdo->prepare("
         SELECT avg_rent_1br, avg_rent_2br, avg_rent_3br
         FROM monthly_market_stats
@@ -195,6 +314,46 @@ try {
     $design = $stmt->fetch(PDO::FETCH_ASSOC);
 } catch (PDOException $e) { $design = null; }
 
+// ── 9. Load financing scenario (Session B) ───────────────────────
+// Builder selects financing path via URL param &financing_scenario=...
+// Defaults to the scenario marked is_default=1 in admin (CMHC MLI Select).
+// Valid keys: cmhc_mli | conventional | private | all_cash
+$requested_scenario = trim($_GET['financing_scenario'] ?? '');
+$valid_scenarios    = ['cmhc_mli','conventional','private','all_cash'];
+if (!in_array($requested_scenario, $valid_scenarios, true)) {
+    $requested_scenario = '';  // empty = use default
+}
+
+$fa = null;
+try {
+    if ($requested_scenario !== '') {
+        $stmt = $pdo->prepare("SELECT * FROM financing_assumptions WHERE scenario_key = ? LIMIT 1");
+        $stmt->execute([$requested_scenario]);
+        $fa = $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+    // Fallback chain: requested → default → any row
+    if (!$fa) {
+        $fa = $pdo->query("SELECT * FROM financing_assumptions WHERE is_default = 1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+    }
+    if (!$fa) {
+        $fa = $pdo->query("SELECT * FROM financing_assumptions ORDER BY sort_order ASC, id ASC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+    }
+} catch (PDOException $e) { $fa = null; }
+
+// Scenario identity for response
+$fa_scenario_key       = $fa ? ($fa['scenario_key']   ?? 'cmhc_mli')          : 'cmhc_mli';
+$fa_scenario_label     = $fa ? ($fa['scenario_label'] ?? 'CMHC MLI Select')   : 'CMHC MLI Select';
+$fa_requires_covenant  = $fa ? ((int)($fa['requires_covenant'] ?? 0) === 1)   : false;
+$fa_is_all_cash        = ($fa_scenario_key === 'all_cash');
+
+// Operating assumptions (shared across all scenarios — admin-set per scenario)
+$fa_market_cap_rate   = $fa ? ((float)$fa['market_cap_rate_pct'] / 100) : 0.040;
+$fa_vacancy           = $fa ? ((float)$fa['vacancy_rate_pct']    / 100) : 0.050;
+$fa_rent_growth_pct   = $fa ? (float)($fa['rent_growth_pct']     ?? 3.0) : 3.0;
+$fa_opex_growth_pct   = $fa ? (float)($fa['opex_growth_pct']     ?? 2.5) : 2.5;
+$fa_mortgage_stress_mode = $fa ? ($fa['mortgage_stress_mode']    ?? 'fixed') : 'fixed';
+$fa_mortgage_stress_bps  = $fa ? (int)($fa['mortgage_stress_bps']?? 100)    : 100;
+
 // ── DOM trend ─────────────────────────────────────────────────
 $dom_diff = $dom_current - $dom_previous;
 if      ($dom_diff < -1) { $dom_arrow = '↓'; $dom_colour = 'green'; $dom_label = 'Faster than last month'; }
@@ -202,7 +361,6 @@ elseif  ($dom_diff >  1) { $dom_arrow = '↑'; $dom_colour = 'amber'; $dom_label
 else                      { $dom_arrow = '—'; $dom_colour = 'gray';  $dom_label = 'Stable'; }
 
 // ── Eligibility ───────────────────────────────────────────────
-// Width resolution: manual override > cadastral/polygon
 $lot_width = !empty($property['frontage_override_m'])
     ? (float)$property['frontage_override_m']
     : (float)$property['lot_width_m'];
@@ -240,8 +398,6 @@ $unit_mix = match(true) {
 };
 
 // ── 3-comparable rental mid-point ────────────────────────────
-// Weighted average: liv.rent 45% + REBGV 35% + CMHC 20%
-// Missing sources have their weight redistributed automatically
 $rent_midpoint = $calculator->calculateRentalMidPoint(
     livrent: [
         '1br' => (float)($rent_livrent['avg_rent_1br'] ?? 0),
@@ -260,11 +416,38 @@ $rent_midpoint = $calculator->calculateRentalMidPoint(
     ]
 );
 
-// Fallback defaults if no rental data at all
+// ── Rental override URL params (NEW — matches Session 08 pattern) ─────
+// Each override is optional; if not present, the computed defaults are used.
+$vacancy_override         = (isset($_GET['vacancy_override'])         && $_GET['vacancy_override']         !== '') ? (float)$_GET['vacancy_override']         : null;
+$op_expense_override      = (isset($_GET['op_expense_override'])      && $_GET['op_expense_override']      !== '') ? (float)$_GET['op_expense_override']      : null;
+$density_bonus_override   = (isset($_GET['density_bonus_override'])   && $_GET['density_bonus_override']   !== '') ? (float)$_GET['density_bonus_override']   : null;
+$rent_1br_override        = (isset($_GET['rent_1br_override'])        && $_GET['rent_1br_override']        !== '') ? (float)$_GET['rent_1br_override']        : null;
+$rent_2br_override        = (isset($_GET['rent_2br_override'])        && $_GET['rent_2br_override']        !== '') ? (float)$_GET['rent_2br_override']        : null;
+$rent_3br_override        = (isset($_GET['rent_3br_override'])        && $_GET['rent_3br_override']        !== '') ? (float)$_GET['rent_3br_override']        : null;
+$market_cap_rate_override = (isset($_GET['market_cap_rate_override']) && $_GET['market_cap_rate_override'] !== '') ? (float)$_GET['market_cap_rate_override'] : null;
+
+// Session NEW — rental has its own independent land + build overrides
+$rental_land_override     = (isset($_GET['rental_land_override'])     && $_GET['rental_land_override']     !== '') ? (float)$_GET['rental_land_override']     : null;
+$rental_build_psf_override= (isset($_GET['rental_build_psf_override'])&& $_GET['rental_build_psf_override']!== '') ? (float)$_GET['rental_build_psf_override']: null;
+
+// Session NEW — strata construction financing overrides
+$strata_cfin_ltc          = (isset($_GET['strata_cfin_ltc'])          && $_GET['strata_cfin_ltc']          !== '') ? (float)$_GET['strata_cfin_ltc']          : null;
+$strata_cfin_rate         = (isset($_GET['strata_cfin_rate'])         && $_GET['strata_cfin_rate']         !== '') ? (float)$_GET['strata_cfin_rate']         : null;
+$strata_cfin_term         = (isset($_GET['strata_cfin_term'])         && $_GET['strata_cfin_term']         !== '') ? (int)  $_GET['strata_cfin_term']         : null;
+
+// Session 16 — strata All Cash flag (zero out construction financing when builder has no loan)
+$strata_all_cash          = isset($_GET['strata_all_cash']) && ($_GET['strata_all_cash'] === '1' || $_GET['strata_all_cash'] === 'true');
+
+// Strata overrides (Session 08, preserved)
+$land_override            = (isset($_GET['land_override'])            && $_GET['land_override']            !== '') ? (float)$_GET['land_override']            : null;
+$build_psf_override       = (isset($_GET['build_psf_override'])       && $_GET['build_psf_override']       !== '') ? (float)$_GET['build_psf_override']       : null;
+$psf_override             = (isset($_GET['psf_override'])             && $_GET['psf_override']             !== '') ? (float)$_GET['psf_override']             : null;
+
+// Per-bedroom rent: override > midpoint > hardcoded fallback
 $market_rents_final = [
-    '1br' => $rent_midpoint['1br'] ?: 2100.0,
-    '2br' => $rent_midpoint['2br'] ?: 2750.0,
-    '3br' => $rent_midpoint['3br'] ?: 3200.0,
+    '1br' => $rent_1br_override ?? ($rent_midpoint['1br'] ?: 2100.0),
+    '2br' => $rent_2br_override ?? ($rent_midpoint['2br'] ?: 2750.0),
+    '3br' => $rent_3br_override ?? ($rent_midpoint['3br'] ?: 3200.0),
 ];
 $cmhc_rents_final = [
     '1br' => (float)($cmhc['benchmark_1br'] ?? 1875),
@@ -272,19 +455,47 @@ $cmhc_rents_final = [
     '3br' => (float)($cmhc['benchmark_3br'] ?? 2900),
 ];
 
+// Market cap rate: override > financing_assumptions row > hardcoded 4.0%
+$market_cap_rate_used = $market_cap_rate_override ?? $fa_market_cap_rate;
+// Vacancy: override > financing_assumptions row > calculator default 5%
+$vacancy_rate_used    = $vacancy_override        ?? $fa_vacancy;
+
+// Strata uses its own land/build (existing override mechanism)
+$strata_land_value = $land_override      ?? $land_value;
+$strata_build_psf  = $build_psf_override ?? $build_cost_psf;
+// psf_override (strata HPI toggle — duplex vs detached) still applied to avg_sold_psf
+$strata_avg_sold_psf = $psf_override ?? $avg_sold_psf;
+
+// Rental has independent land + build overrides (Session NEW)
+$rental_land_value = $rental_land_override     ?? $land_value;
+$rental_build_psf  = $rental_build_psf_override ?? $build_cost_psf;
+
 $strata = $calculator->calculateStrataProForma(
-    lot_area_sqm: $lot_area, assessed_land_value: $land_value,
-    build_cost_psf: $build_cost_psf, avg_sold_psf: $avg_sold_psf,
-    is_peat_zone: $is_peat, city: $city
+    lot_area_sqm:         $lot_area,
+    assessed_land_value:  $strata_land_value,
+    build_cost_psf:       $strata_build_psf,
+    avg_sold_psf:         $strata_avg_sold_psf,
+    is_peat_zone:         $is_peat,
+    city:                 $city,
+    construction_fin_ltc:  $strata_cfin_ltc,
+    construction_fin_rate: $strata_cfin_rate,
+    construction_fin_term: $strata_cfin_term,
+    use_all_cash_construction: $strata_all_cash
 );
 
 $rental = $calculator->calculateRentalProForma(
-    lot_area_sqm: $lot_area, assessed_land_value: $land_value,
-    build_cost_psf: $build_cost_psf, density_bonus_psf_rate: 40.00,
-    is_peat_zone: $is_peat, unit_mix: $unit_mix,
-    market_rents:    $market_rents_final,
-    cmhc_benchmarks: $cmhc_rents_final,
-    vacancy_rate: 0.05, city: $city
+    lot_area_sqm:           $lot_area,
+    assessed_land_value:    $rental_land_value,
+    build_cost_psf:         $rental_build_psf,
+    density_bonus_psf_rate: $density_bonus_override,
+    is_peat_zone:           $is_peat,
+    unit_mix:               $unit_mix,
+    market_rents:           $market_rents_final,
+    cmhc_benchmarks:        $cmhc_rents_final,
+    vacancy_rate:           $vacancy_rate_used,
+    operating_expense_rate: $op_expense_override,
+    city:                   $city,
+    market_cap_rate:        $market_cap_rate_used
 );
 
 // ── Population data (Layer 4) ────────────────────────────────
@@ -313,7 +524,7 @@ try {
                 / $y_old['housing_units_total']) * 100;
         }
     }
-} catch (PDOException $e) { /* table not yet populated — Layer 4 = 0 */ }
+} catch (PDOException $e) {}
 
 // ── Wynston Outlook — read pre-calculated row from wynston_outlook ────────
 $outlook = null;
@@ -369,7 +580,77 @@ try {
     }
 } catch (PDOException $e) { $outlook = null; }
 
-$confidence_tier = $calculator->getConfidenceTier($sales_count);
+$confidence_tier = $calculator->getConfidenceTier($sales_count, $market_window);
+
+// ── Year 1/5/10 cash flow projection ──────────────────────────
+// Scenario-driven financing (Session B). Defaults come from the selected
+// scenario row; builder can override any field via URL params:
+//   fin_ltc, fin_rate, fin_amort, fin_premium
+// All Cash scenario short-circuits: zero debt, 100% equity.
+
+$fa_ltc_default      = $fa ? ((float)$fa['ltc_pct']           / 100) : 0.75;
+$fa_rate_default     = $fa ? ((float)$fa['interest_rate_pct'] / 100) : 0.0525;
+$fa_amort_default    = $fa ? (int)  $fa['amortization_years']         : 40;
+$fa_ins_prem_default = $fa ? ((float)$fa['insurance_prem_pct'] / 100) : 0.04;
+
+// Per-field overrides from URL. Only apply if explicitly provided.
+$fa_ltc      = isset($_GET['fin_ltc'])     ? max(0, min(0.95, (float)$_GET['fin_ltc']))     : $fa_ltc_default;
+$fa_rate     = isset($_GET['fin_rate'])    ? max(0, min(0.20, (float)$_GET['fin_rate']))    : $fa_rate_default;
+$fa_amort    = isset($_GET['fin_amort'])   ? max(0, min(50,   (int)  $_GET['fin_amort']))   : $fa_amort_default;
+$fa_ins_prem = isset($_GET['fin_premium']) ? max(0, min(0.10, (float)$_GET['fin_premium'])) : $fa_ins_prem_default;
+
+// All Cash: force debt to zero regardless of scenario LTC
+if ($fa_is_all_cash) {
+    $fa_ltc      = 0.0;
+    $fa_rate     = 0.0;
+    $fa_amort    = 0;
+    $fa_ins_prem = 0.0;
+}
+
+$r_loan_base_est   = $rental['total_project_cost'] * $fa_ltc;
+$r_loan_total_est  = $r_loan_base_est * (1 + $fa_ins_prem);
+$r_monthly_rate    = $fa_rate / 12;
+$r_n_payments      = $fa_amort * 12;
+
+if ($fa_is_all_cash || $r_loan_total_est <= 0 || $r_n_payments <= 0) {
+    $r_monthly_pmt_est = 0.0;
+} elseif ($r_monthly_rate > 0) {
+    $r_monthly_pmt_est = $r_loan_total_est * ($r_monthly_rate * pow(1+$r_monthly_rate, $r_n_payments)) / (pow(1+$r_monthly_rate, $r_n_payments) - 1);
+} else {
+    $r_monthly_pmt_est = $r_loan_total_est / $r_n_payments;
+}
+$r_annual_debt_est = $r_monthly_pmt_est * 12;
+
+$cash_flow_projection = $calculator->projectRentalCashFlow(
+    year1_gross_monthly:  $rental['gross_monthly'],
+    year1_opex_amount:    $rental['opex_amount'],
+    year1_debt_service:   $r_annual_debt_est,
+    vacancy_rate:         $rental['vacancy_rate'],
+    rent_growth_pct:      $fa_rent_growth_pct,
+    opex_growth_pct:      $fa_opex_growth_pct,
+    mortgage_stress_mode: $fa_is_all_cash ? 'fixed' : $fa_mortgage_stress_mode,
+    mortgage_stress_bps:  $fa_is_all_cash ? 0       : $fa_mortgage_stress_bps,
+    loan_balance_approx:  $r_loan_total_est
+);
+
+// Attach debt/equity summary so panel can show them without recalculating.
+// Session B: includes scenario identity + all_cash flag for conditional UI.
+$rental_financing_summary = [
+    'scenario_key'       => $fa_scenario_key,
+    'scenario_label'     => $fa_scenario_label,
+    'is_all_cash'        => $fa_is_all_cash,
+    'requires_covenant'  => $fa_requires_covenant,
+    'loan_total_est'     => round($r_loan_total_est, 2),
+    'monthly_pmt_est'    => round($r_monthly_pmt_est, 2),
+    'annual_debt_est'    => round($r_annual_debt_est, 2),
+    'equity_required'    => $fa_is_all_cash
+                              ? round($rental['total_project_cost'], 2)
+                              : round($rental['total_project_cost'] * (1 - $fa_ltc), 2),
+    'ltc_pct'            => round($fa_ltc * 100, 1),
+    'interest_rate_pct'  => round($fa_rate * 100, 2),
+    'amort_years'        => (int)$fa_amort,
+    'insurance_prem_pct' => round($fa_ins_prem * 100, 2),
+];
 
 // ── Response ──────────────────────────────────────────────────
 echo json_encode([
@@ -412,9 +693,11 @@ echo json_encode([
     ],
     'strata'  => $strata,
     'rental'  => array_merge($rental, [
-        // Attach rent source detail so side panel can show per-source values
-        'rent_sources' => $rent_midpoint['detail'] ?? [],
-        'sources_used' => $rent_midpoint['sources_used'] ?? [],
+        'rent_sources'   => $rent_midpoint['detail'] ?? [],
+        'sources_used'   => $rent_midpoint['sources_used'] ?? [],
+        'fallback_used'  => $rent_midpoint['fallback_used'] ?? ['1br'=>false,'2br'=>false,'3br'=>false],
+        'financing'      => $rental_financing_summary,
+        'cash_flow'      => $cash_flow_projection,
     ]),
     'outlook' => $outlook,
     'design'  => $design ? [
@@ -433,9 +716,12 @@ echo json_encode([
     ],
     'path_requested' => $path,
     'market_data' => [
-        'avg_sold_psf'  => $avg_sold_psf,
-        'sales_count'   => $sales_count,
-        'data_month'    => $market_sold['data_month'] ?? null,
-        'using_fallback'=> ($sales_count === 0),
+        'avg_sold_psf'        => $avg_sold_psf,
+        'sales_count'         => $sales_count,
+        'data_month'          => $market_sold['data_month'] ?? null,
+        'earliest_month'      => $market_sold['earliest_month'] ?? null,
+        'data_window'         => $market_window,
+        'using_fallback'      => ($sales_count === 0),
+        'detached_benchmark'  => $detached_benchmark,
     ],
 ], JSON_PRETTY_PRINT);
