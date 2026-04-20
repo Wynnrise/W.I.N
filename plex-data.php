@@ -446,7 +446,7 @@ body{background:#f0f4f8;font-family:'Segoe UI',system-ui,sans-serif;margin:0;pad
     <a href="plex-data.php?tab=history" class="<?= $active_tab==='history'?'active':'' ?>">
         <i class="fas fa-history"></i> Upload History</a>
     <a href="plex-data.php?tab=financing" class="<?= $active_tab==='financing'?'active':'' ?>" style="<?= $active_tab==='financing'?'border-bottom-color:#c9a84c;color:#c9a84c':'' ?>">
-        <i class="fas fa-university"></i> CMHC MLI Assumptions</a>
+        <i class="fas fa-university"></i> Financing Scenarios</a>
 </div>
 
 <div class="content">
@@ -530,7 +530,79 @@ if ($active_tab === 'market-prices'): ?>
     </div>
 </div>
 
-<!-- ── Section B: HPI Bulk (DOM + Benchmark Prices from PDF) ────────────────── -->
+<!-- ── Section A-2: Paragon Sold Detached CSV (Reference Only) ───────────── -->
+<div class="card" style="margin-bottom:24px;">
+    <h3><i class="fas fa-file-csv me-2" style="color:#8b5cf6"></i>Section A-2 — Paragon Sold Detached CSV
+        <span class="freq-badge ms-2">Monthly</span>
+        <span style="font-size:11px;font-weight:600;color:#8b5cf6;margin-left:8px;background:#f5f3ff;padding:2px 8px;border-radius:4px">REFERENCE ONLY</span>
+    </h3>
+    <p class="sub">Upload your Paragon export of sold detached (house) listings. <strong>Not used in any pro forma calculation.</strong> Displayed in the map panel and report as a market context benchmark for investor presentations only.</p>
+    <div class="info-box" style="border-left-color:#8b5cf6">
+        <strong>Paragon export settings:</strong>
+        Status = <strong>P + F</strong> · Type = <strong>House</strong> · Yr Blt = <strong>2020+</strong> · Sold Date = last 24 months · Area = Vancouver West + East combined<br>
+        Columns needed: <code>Address, S/A, Status, Sold Price, Price Per SQFT, TotFlArea, Yr Blt, Sold Date, DOM</code><br>
+        <strong style="color:#8b5cf6">Important:</strong> Exclude Yr Blt = 9999 rows before uploading (these are land-only sales, not new builds).
+    </div>
+    <div id="chA2-result"></div>
+    <div class="row g-3 mb-3">
+        <div class="col-md-4">
+            <label class="form-label">Data Month <small style="color:#aaa">(fallback if no Sold Date in CSV)</small></label>
+            <input type="month" id="chA2_month" class="form-control" value="<?= date('Y-m') ?>">
+        </div>
+        <div class="col-md-3">
+            <label class="form-label">Min Year Built</label>
+            <select id="chA2_yr_min" class="form-select">
+                <option value="2020" selected>2020+</option>
+                <option value="2018">2018+</option>
+                <option value="2015">2015+</option>
+            </select>
+        </div>
+    </div>
+
+    <script>
+    var _chA2_file = null;
+    function chA2HandleFile(f) {
+        if (!f) return;
+        _chA2_file = f;
+        document.getElementById('chA2_dz').classList.add('dz-selected');
+        document.getElementById('chA2_dz_icon').className = 'fas fa-check-circle';
+        document.getElementById('chA2_dz_text').textContent = '\u2705 ' + f.name + ' \u2014 ready to upload';
+    }
+    function chA2HandleDrop(e) {
+        e.preventDefault();
+        document.getElementById('chA2_dz').classList.remove('dz-active');
+        var files = e.dataTransfer && e.dataTransfer.files;
+        if (files && files[0]) chA2HandleFile(files[0]);
+    }
+    function chA2DragOver(e) { e.preventDefault(); document.getElementById('chA2_dz').classList.add('dz-active'); }
+    function chA2DragLeave()  { document.getElementById('chA2_dz').classList.remove('dz-active'); }
+    </script>
+
+    <div class="dz" id="chA2_dz"
+         onclick="document.getElementById('chA2_file').click()"
+         ondragover="chA2DragOver(event)"
+         ondragleave="chA2DragLeave()"
+         ondrop="chA2HandleDrop(event)">
+        <div><i class="fas fa-home dz-icon" id="chA2_dz_icon" style="color:#8b5cf6"></i></div>
+        <div class="dz-text" id="chA2_dz_text">Drag &amp; drop Paragon detached CSV here, or <span style="color:#8b5cf6;text-decoration:underline;">click to browse</span></div>
+        <input type="file" id="chA2_file" accept=".csv" style="display:none"
+               onchange="chA2HandleFile(this.files[0])">
+    </div>
+
+    <div id="chA2_progress" style="display:none;margin-top:12px;padding:12px 16px;background:#f5f3ff;border-radius:8px;font-size:13px;color:#6d28d9;">
+        <i class="fas fa-spinner fa-spin me-2"></i><span id="chA2_progress_msg">Processing rows...</span>
+    </div>
+    <button class="btn-primary-w mt-3" id="chA2_submit" onclick="submitChannelA2()" style="background:#7c3aed">
+        <i class="fas fa-upload"></i>Upload Detached Reference Data
+    </button>
+    <div id="chA2_preview" style="display:none;margin-top:20px;">
+        <div id="chA2_stats" style="margin-bottom:10px;font-size:13px;color:#6d28d9;font-weight:600;"></div>
+        <div id="chA2_errors" style="margin-bottom:10px;font-size:12px;color:#b91c1c;"></div>
+        <div style="overflow-x:auto;" id="chA2_table_wrap"></div>
+    </div>
+</div>
+
+<!-- ── Section B: HPI Bulk ───────────────────────────────────────────────── -->
 <div class="card">
     <h3><i class="fas fa-file-csv me-2" style="color:var(--blue)"></i>Section B — REBGV HPI Data (DOM + Benchmark Prices)
         <span class="freq-badge ms-2">Monthly</span></h3>
@@ -1182,161 +1254,255 @@ elseif ($active_tab === 'history'): ?>
 
 <?php elseif ($active_tab === 'financing'):
 
-// ── Create table if not exists ────────────────────────────────────────────
+// ── Ensure scenario columns exist (idempotent) ────────────────────────────
 try {
-    $pdo->exec("CREATE TABLE IF NOT EXISTS financing_assumptions (
-        id                   INT AUTO_INCREMENT PRIMARY KEY,
-        assumption_name      VARCHAR(100) NOT NULL DEFAULT 'CMHC MLI Select',
-        ltc_pct              DECIMAL(5,2) NOT NULL DEFAULT 75.00,
-        interest_rate_pct    DECIMAL(5,2) NOT NULL DEFAULT 5.25,
-        amortization_years   INT          NOT NULL DEFAULT 40,
-        insurance_prem_pct   DECIMAL(5,2) NOT NULL DEFAULT 4.00,
-        market_cap_rate_pct  DECIMAL(5,2) NOT NULL DEFAULT 4.50,
-        vacancy_rate_pct     DECIMAL(5,2) NOT NULL DEFAULT 5.00,
-        mgmt_fee_pct         DECIMAL(5,2) NOT NULL DEFAULT 8.00,
-        insurance_per_unit   DECIMAL(8,2) NOT NULL DEFAULT 150.00,
-        maintenance_per_unit DECIMAL(8,2) NOT NULL DEFAULT 900.00,
-        property_tax_rate    DECIMAL(6,4) NOT NULL DEFAULT 0.0030,
-        notes                TEXT,
-        updated_at           DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        updated_by           VARCHAR(100) DEFAULT NULL
-    )");
-    $cnt = (int)$pdo->query("SELECT COUNT(*) FROM financing_assumptions")->fetchColumn();
-    if ($cnt === 0) {
-        $pdo->exec("INSERT INTO financing_assumptions
-            (assumption_name,ltc_pct,interest_rate_pct,amortization_years,
-             insurance_prem_pct,market_cap_rate_pct,vacancy_rate_pct,
-             mgmt_fee_pct,insurance_per_unit,maintenance_per_unit,
-             property_tax_rate,notes,updated_by)
-            VALUES('CMHC MLI Select',75.00,5.25,40,4.00,4.50,5.00,8.00,150.00,900.00,0.0030,
-            'CMHC MLI Select — purpose-built rental financing. Verify current rates with mortgage broker.',
-            'Admin')");
-    }
+    $pdo->exec("ALTER TABLE financing_assumptions
+        ADD COLUMN IF NOT EXISTS scenario_key VARCHAR(30) DEFAULT 'cmhc_mli',
+        ADD COLUMN IF NOT EXISTS scenario_label VARCHAR(100) DEFAULT 'CMHC MLI Select',
+        ADD COLUMN IF NOT EXISTS is_default TINYINT(1) DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS sort_order INT DEFAULT 10,
+        ADD COLUMN IF NOT EXISTS requires_covenant TINYINT(1) DEFAULT 0");
 } catch(PDOException $e) {}
 
-// ── Handle POST save ──────────────────────────────────────────────────────
+// ── Handle POST: save one scenario ────────────────────────────────────────
 $fa_msg = ''; $fa_type = '';
-if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['save_financing'])) {
-    try {
-        $pdo->prepare("UPDATE financing_assumptions SET
-            assumption_name=?, ltc_pct=?, interest_rate_pct=?, amortization_years=?,
-            insurance_prem_pct=?, market_cap_rate_pct=?, vacancy_rate_pct=?,
-            mgmt_fee_pct=?, insurance_per_unit=?, maintenance_per_unit=?,
-            property_tax_rate=?, notes=?, updated_at=NOW(), updated_by='Admin'
-            WHERE id=1")->execute([
-            trim($_POST['assumption_name'] ?? 'CMHC MLI Select'),
-            (float)($_POST['ltc_pct'] ?? 75),
-            (float)($_POST['interest_rate_pct'] ?? 5.25),
-            (int)($_POST['amortization_years'] ?? 40),
-            (float)($_POST['insurance_prem_pct'] ?? 4.00),
-            (float)($_POST['market_cap_rate_pct'] ?? 4.50),
-            (float)($_POST['vacancy_rate_pct'] ?? 5.00),
-            (float)($_POST['mgmt_fee_pct'] ?? 8.00),
-            (float)($_POST['insurance_per_unit'] ?? 150.00),
-            (float)($_POST['maintenance_per_unit'] ?? 900.00),
-            (float)($_POST['property_tax_rate'] ?? 0.0030),
-            trim($_POST['notes'] ?? ''),
-        ]);
-        $fa_msg = '✅ CMHC MLI assumptions saved. All new rental reports will use these values immediately.';
-        $fa_type = 'ok';
-    } catch(PDOException $e) {
-        $fa_msg = '❌ Save failed: '.htmlspecialchars($e->getMessage());
+
+if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['save_scenario'])) {
+    $sid = (int)($_POST['scenario_id'] ?? 0);
+    if ($sid <= 0) {
+        $fa_msg = '❌ Invalid scenario ID.';
         $fa_type = 'err';
+    } else {
+        try {
+            $stmt = $pdo->prepare("UPDATE financing_assumptions SET
+                scenario_label       = ?,
+                assumption_name      = ?,
+                ltc_pct              = ?,
+                interest_rate_pct    = ?,
+                amortization_years   = ?,
+                insurance_prem_pct   = ?,
+                market_cap_rate_pct  = ?,
+                vacancy_rate_pct     = ?,
+                mgmt_fee_pct         = ?,
+                insurance_per_unit   = ?,
+                maintenance_per_unit = ?,
+                property_tax_rate    = ?,
+                rent_growth_pct      = ?,
+                opex_growth_pct      = ?,
+                mortgage_stress_mode = ?,
+                mortgage_stress_bps  = ?,
+                requires_covenant    = ?,
+                notes                = ?,
+                updated_at           = NOW(),
+                updated_by           = 'Admin'
+                WHERE id = ?");
+            $label = trim($_POST['scenario_label'] ?? 'Scenario');
+            $stmt->execute([
+                $label,
+                $label, // assumption_name mirrors label
+                (float)($_POST['ltc_pct'] ?? 0),
+                (float)($_POST['interest_rate_pct'] ?? 0),
+                (int)($_POST['amortization_years'] ?? 0),
+                (float)($_POST['insurance_prem_pct'] ?? 0),
+                (float)($_POST['market_cap_rate_pct'] ?? 0),
+                (float)($_POST['vacancy_rate_pct'] ?? 0),
+                (float)($_POST['mgmt_fee_pct'] ?? 0),
+                (float)($_POST['insurance_per_unit'] ?? 0),
+                (float)($_POST['maintenance_per_unit'] ?? 0),
+                (float)($_POST['property_tax_rate'] ?? 0),
+                (float)($_POST['rent_growth_pct'] ?? 0),
+                (float)($_POST['opex_growth_pct'] ?? 0),
+                ($_POST['mortgage_stress_mode'] ?? 'fixed') === 'stress_y5' ? 'stress_y5' : 'fixed',
+                (int)($_POST['mortgage_stress_bps'] ?? 0),
+               (isset($_POST['covenant_submitted']) && $_POST['covenant_submitted']==='1')
+                    ? (isset($_POST['requires_covenant']) ? 1 : 0)
+                    : (int)$pdo->query("SELECT requires_covenant FROM financing_assumptions WHERE id=".(int)$sid)->fetchColumn(),
+                trim($_POST['notes'] ?? ''),
+                $sid
+            ]);
+            $fa_msg = '✅ Scenario saved. All new rental reports will use these values immediately.';
+            $fa_type = 'ok';
+        } catch(PDOException $e) {
+            $fa_msg = '❌ Save failed: '.htmlspecialchars($e->getMessage());
+            $fa_type = 'err';
+        }
     }
 }
 
-$fa = $pdo->query("SELECT * FROM financing_assumptions ORDER BY updated_at DESC LIMIT 1")->fetch();
+// ── Handle POST: set default ──────────────────────────────────────────────
+if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['set_default_scenario'])) {
+    $sid = (int)($_POST['scenario_id'] ?? 0);
+    if ($sid > 0) {
+        try {
+            $pdo->beginTransaction();
+            $pdo->exec("UPDATE financing_assumptions SET is_default = 0");
+            $pdo->prepare("UPDATE financing_assumptions SET is_default = 1 WHERE id = ?")->execute([$sid]);
+            $pdo->commit();
+            $fa_msg = '✅ Default scenario updated.';
+            $fa_type = 'ok';
+        } catch(PDOException $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            $fa_msg = '❌ Failed to update default: '.htmlspecialchars($e->getMessage());
+            $fa_type = 'err';
+        }
+    }
+}
+
+// ── Load all scenarios ────────────────────────────────────────────────────
+$scenarios = $pdo->query("SELECT * FROM financing_assumptions ORDER BY sort_order ASC, id ASC")->fetchAll();
+
+// Which row is being edited? (?edit=ID in URL)
+$edit_id = (int)($_GET['edit'] ?? 0);
 ?>
 
 <div class="card">
-    <h3><i class="fas fa-university me-2" style="color:var(--gold)"></i>CMHC MLI Select — Financing Assumptions</h3>
-    <p class="sub">These values drive every <strong>Rental / Hold</strong> report. Update whenever CMHC changes MLI Select criteria, rates, or insurance premiums. Changes take effect immediately on the next report generated.</p>
+    <h3><i class="fas fa-university me-2" style="color:var(--gold)"></i>Financing Scenarios</h3>
+    <p class="sub">These scenarios power the <strong>Rental / Hold</strong> financing dropdown on the map panel. Changes take effect immediately on the next report generated. Click <strong>Edit</strong> to modify a scenario. Only one row can be edited at a time.</p>
 
     <?php if ($fa_msg): ?>
     <div class="result-box <?= $fa_type ?>" style="margin-bottom:20px"><?= $fa_msg ?></div>
     <?php endif; ?>
 
-    <form method="POST" action="plex-data.php?tab=financing">
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:20px">
+    <div style="overflow-x:auto;">
+    <table class="preview-table" style="min-width:960px">
+        <thead>
+            <tr>
+                <th>Scenario</th>
+                <th style="text-align:right">LTC %</th>
+                <th style="text-align:right">Rate %</th>
+                <th style="text-align:right">Amort</th>
+                <th style="text-align:right">Cap %</th>
+                <th style="text-align:right">Vac %</th>
+                <th style="text-align:center">Cov.</th>
+                <th style="text-align:center">Default</th>
+                <th style="text-align:center;width:160px">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+        <?php foreach ($scenarios as $s): ?>
+            <?php $is_editing = ($edit_id === (int)$s['id']); ?>
 
-        <div>
-            <div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#888;margin-bottom:16px;padding-bottom:8px;border-bottom:2px solid #002446">Financing Structure</div>
+            <?php if (!$is_editing): // ── Display row ── ?>
+            <tr>
+                <td><strong><?= htmlspecialchars($s['scenario_label'] ?? $s['assumption_name']) ?></strong></td>
+                <td style="text-align:right"><?= number_format((float)$s['ltc_pct'],2) ?></td>
+                <td style="text-align:right"><?= number_format((float)$s['interest_rate_pct'],2) ?></td>
+                <td style="text-align:right"><?= (int)$s['amortization_years'] ?></td>
+                <td style="text-align:right"><?= number_format((float)$s['market_cap_rate_pct'],2) ?></td>
+                <td style="text-align:right"><?= number_format((float)$s['vacancy_rate_pct'],2) ?></td>
+                <td style="text-align:center;color:<?= !empty($s['requires_covenant'])?'#16a34a':'#bbb' ?>;font-weight:700"><?= !empty($s['requires_covenant'])?'✓':'—' ?></td>
+                <td style="text-align:center">
+                    <?php if (!empty($s['is_default'])): ?>
+                        <span style="background:#c9a84c;color:#fff;padding:3px 10px;border-radius:4px;font-size:10px;font-weight:700;letter-spacing:.5px">DEFAULT</span>
+                    <?php else: ?>
+                        <form method="POST" action="plex-data.php?tab=financing" style="display:inline;margin:0">
+                            <input type="hidden" name="scenario_id" value="<?= (int)$s['id'] ?>">
+                            <button type="submit" name="set_default_scenario" style="background:#fff;border:1px solid #c9a84c;color:#c9a84c;padding:3px 10px;border-radius:3px;font-size:10px;cursor:pointer;font-weight:700;letter-spacing:.3px">SET DEFAULT</button>
+                        </form>
+                    <?php endif; ?>
+                </td>
+                <td style="text-align:center">
+                    <a href="plex-data.php?tab=financing&edit=<?= (int)$s['id'] ?>" style="background:#fff;border:1px solid #002446;color:#002446;padding:5px 14px;border-radius:3px;font-size:11px;text-decoration:none;font-weight:600;display:inline-block">Edit</a>
+                </td>
+            </tr>
 
-            <div class="mb-3">
-                <label class="form-label">Assumption Name</label>
-                <input type="text" name="assumption_name" class="form-control" value="<?= htmlspecialchars($fa['assumption_name'] ?? 'CMHC MLI Select') ?>">
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Loan-to-Cost (LTC) % <small style="color:#aaa">— MLI Select = 75%</small></label>
-                <input type="number" name="ltc_pct" class="form-control" step="0.25" min="50" max="85" value="<?= $fa['ltc_pct'] ?? 75 ?>">
-                <div class="form-text">Equity required = 100% − LTC. At 75% → 25% equity down.</div>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Interest Rate % <small style="color:#aaa">— annual insured rate</small></label>
-                <input type="number" name="interest_rate_pct" class="form-control" step="0.05" min="2" max="12" value="<?= $fa['interest_rate_pct'] ?? 5.25 ?>">
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Amortization (years) <small style="color:#aaa">— MLI Select allows 40</small></label>
-                <input type="number" name="amortization_years" class="form-control" step="5" min="20" max="40" value="<?= $fa['amortization_years'] ?? 40 ?>">
-            </div>
-            <div class="mb-3">
-                <label class="form-label">CMHC Insurance Premium % <small style="color:#aaa">— of loan amount</small></label>
-                <input type="number" name="insurance_prem_pct" class="form-control" step="0.25" min="0" max="6" value="<?= $fa['insurance_prem_pct'] ?? 4.00 ?>">
-                <div class="form-text">4.00% at 75% LTC. Added to loan principal.</div>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Market Cap Rate % <small style="color:#aaa">— for asset sale valuation</small></label>
-                <input type="number" name="market_cap_rate_pct" class="form-control" step="0.25" min="2" max="8" value="<?= $fa['market_cap_rate_pct'] ?? 4.50 ?>">
-                <div class="form-text">Asset sale value = NOI ÷ cap rate.</div>
-            </div>
-        </div>
+            <?php else: // ── Edit row ── ?>
+            <tr style="background:#fffdf5">
+                <form method="POST" action="plex-data.php?tab=financing" id="scenario-form-<?= (int)$s['id'] ?>">
+                    <input type="hidden" name="scenario_id" value="<?= (int)$s['id'] ?>">
 
-        <div>
-            <div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#888;margin-bottom:16px;padding-bottom:8px;border-bottom:2px solid var(--gold)">Operating Assumptions</div>
+                    <td><input type="text" name="scenario_label" value="<?= htmlspecialchars($s['scenario_label'] ?? '') ?>" form="scenario-form-<?= (int)$s['id'] ?>" style="width:100%;padding:5px 7px;border:1px solid #c9a84c;border-radius:3px;font-size:11px"></td>
+                    <td><input type="number" step="0.25" min="0" max="100" name="ltc_pct" value="<?= $s['ltc_pct'] ?>" form="scenario-form-<?= (int)$s['id'] ?>" style="width:70px;padding:5px 7px;border:1px solid #c9a84c;border-radius:3px;font-size:11px;text-align:right"></td>
+                    <td><input type="number" step="0.05" min="0" max="15" name="interest_rate_pct" value="<?= $s['interest_rate_pct'] ?>" form="scenario-form-<?= (int)$s['id'] ?>" style="width:70px;padding:5px 7px;border:1px solid #c9a84c;border-radius:3px;font-size:11px;text-align:right"></td>
+                    <td><input type="number" step="1" min="0" max="50" name="amortization_years" value="<?= $s['amortization_years'] ?>" form="scenario-form-<?= (int)$s['id'] ?>" style="width:55px;padding:5px 7px;border:1px solid #c9a84c;border-radius:3px;font-size:11px;text-align:right"></td>
+                    <td><input type="number" step="0.25" min="0" max="15" name="market_cap_rate_pct" value="<?= $s['market_cap_rate_pct'] ?>" form="scenario-form-<?= (int)$s['id'] ?>" style="width:70px;padding:5px 7px;border:1px solid #c9a84c;border-radius:3px;font-size:11px;text-align:right"></td>
+                    <td><input type="number" step="0.5" min="0" max="20" name="vacancy_rate_pct" value="<?= $s['vacancy_rate_pct'] ?>" form="scenario-form-<?= (int)$s['id'] ?>" style="width:70px;padding:5px 7px;border:1px solid #c9a84c;border-radius:3px;font-size:11px;text-align:right"></td>
+                    <td style="text-align:center">
+                        <input type="hidden" name="covenant_submitted" value="1" form="scenario-form-<?= (int)$s['id'] ?>">
+                        <input type="checkbox" name="requires_covenant" value="1" <?= !empty($s['requires_covenant'])?'checked':'' ?> form="scenario-form-<?= (int)$s['id'] ?>" style="transform:scale(1.15)">
+                    </td>
+                    <td style="text-align:center;color:#999">—</td>
+                    <td style="text-align:center;white-space:nowrap">
+                        <button type="submit" name="save_scenario" form="scenario-form-<?= (int)$s['id'] ?>" style="background:#c9a84c;border:1px solid #c9a84c;color:#fff;padding:5px 10px;border-radius:3px;font-size:11px;cursor:pointer;font-weight:700;margin-right:4px">Save</button>
+                        <a href="plex-data.php?tab=financing" style="background:#fff;border:1px solid #999;color:#666;padding:4px 10px;border-radius:3px;font-size:11px;text-decoration:none">Cancel</a>
+                    </td>
+                </form>
+            </tr>
 
-            <div class="mb-3">
-                <label class="form-label">Vacancy Rate % <small style="color:#aaa">— lender standard = 5%</small></label>
-                <input type="number" name="vacancy_rate_pct" class="form-control" step="0.5" min="0" max="15" value="<?= $fa['vacancy_rate_pct'] ?? 5.00 ?>">
-                <div class="form-text">Vancouver purpose-built actual ~1–2%. 5% is conservative.</div>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Property Management Fee % <small style="color:#aaa">— of EGI</small></label>
-                <input type="number" name="mgmt_fee_pct" class="form-control" step="0.5" min="0" max="15" value="<?= $fa['mgmt_fee_pct'] ?? 8.00 ?>">
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Building Insurance ($/unit/year)</label>
-                <input type="number" name="insurance_per_unit" class="form-control" step="25" min="0" max="2000" value="<?= $fa['insurance_per_unit'] ?? 150.00 ?>">
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Maintenance & Repairs ($/unit/year)</label>
-                <input type="number" name="maintenance_per_unit" class="form-control" step="50" min="0" max="5000" value="<?= $fa['maintenance_per_unit'] ?? 900.00 ?>">
-                <div class="form-text">$900/yr = $75/mo per unit — standard lender allowance.</div>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Property Tax Rate <small style="color:#aaa">— decimal (0.0030 = 0.30%)</small></label>
-                <input type="number" name="property_tax_rate" class="form-control" step="0.0001" min="0.001" max="0.02" value="<?= $fa['property_tax_rate'] ?? 0.0030 ?>">
-                <div class="form-text">Vancouver Class 1 Residential ~0.30% of assessed value.</div>
-            </div>
-        </div>
+            <!-- Expanded edit panel (operational fields) -->
+            <tr style="background:#fffdf5">
+                <td colspan="9" style="padding:20px 24px;border-top:none">
+                    <div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#888;margin-bottom:14px;padding-bottom:6px;border-bottom:2px solid var(--gold)">Operational &amp; Advanced Settings</div>
+
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;margin-bottom:16px">
+
+                        <div>
+                            <label class="form-label" style="font-size:11px">CMHC Insurance Premium %</label>
+                            <input type="number" step="0.25" min="0" max="10" name="insurance_prem_pct" value="<?= $s['insurance_prem_pct'] ?>" form="scenario-form-<?= (int)$s['id'] ?>" class="form-control" style="font-size:12px">
+                            <div class="form-text" style="font-size:10px">CMHC = 4.00% at 75% LTC. Non-CMHC = 0.</div>
+                        </div>
+                        <div>
+                            <label class="form-label" style="font-size:11px">Property Management Fee %</label>
+                            <input type="number" step="0.5" min="0" max="20" name="mgmt_fee_pct" value="<?= $s['mgmt_fee_pct'] ?>" form="scenario-form-<?= (int)$s['id'] ?>" class="form-control" style="font-size:12px">
+                            <div class="form-text" style="font-size:10px">% of effective gross income.</div>
+                        </div>
+                        <div>
+                            <label class="form-label" style="font-size:11px">Building Insurance ($/unit/yr)</label>
+                            <input type="number" step="25" min="0" max="3000" name="insurance_per_unit" value="<?= $s['insurance_per_unit'] ?>" form="scenario-form-<?= (int)$s['id'] ?>" class="form-control" style="font-size:12px">
+                        </div>
+
+                        <div>
+                            <label class="form-label" style="font-size:11px">Maintenance &amp; Repairs ($/unit/yr)</label>
+                            <input type="number" step="50" min="0" max="5000" name="maintenance_per_unit" value="<?= $s['maintenance_per_unit'] ?>" form="scenario-form-<?= (int)$s['id'] ?>" class="form-control" style="font-size:12px">
+                        </div>
+                        <div>
+                            <label class="form-label" style="font-size:11px">Property Tax Rate (decimal)</label>
+                            <input type="number" step="0.0001" min="0" max="0.05" name="property_tax_rate" value="<?= $s['property_tax_rate'] ?>" form="scenario-form-<?= (int)$s['id'] ?>" class="form-control" style="font-size:12px">
+                            <div class="form-text" style="font-size:10px">0.0030 = 0.30%.</div>
+                        </div>
+                        <div>
+                            <label class="form-label" style="font-size:11px">Rent Growth % (annual)</label>
+                            <input type="number" step="0.25" min="0" max="15" name="rent_growth_pct" value="<?= $s['rent_growth_pct'] ?? 3.00 ?>" form="scenario-form-<?= (int)$s['id'] ?>" class="form-control" style="font-size:12px">
+                        </div>
+
+                        <div>
+                            <label class="form-label" style="font-size:11px">Opex Growth % (annual)</label>
+                            <input type="number" step="0.25" min="0" max="15" name="opex_growth_pct" value="<?= $s['opex_growth_pct'] ?? 2.50 ?>" form="scenario-form-<?= (int)$s['id'] ?>" class="form-control" style="font-size:12px">
+                        </div>
+                        <div>
+                            <label class="form-label" style="font-size:11px">Mortgage Stress Mode</label>
+                            <select name="mortgage_stress_mode" form="scenario-form-<?= (int)$s['id'] ?>" class="form-control" style="font-size:12px">
+                                <option value="fixed" <?= ($s['mortgage_stress_mode'] ?? 'fixed')==='fixed'?'selected':'' ?>>Fixed rate (no stress)</option>
+                                <option value="stress_y5" <?= ($s['mortgage_stress_mode'] ?? '')==='stress_y5'?'selected':'' ?>>Stress-test at Y5 renewal</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="form-label" style="font-size:11px">Stress BPS (at renewal)</label>
+                            <input type="number" step="25" min="0" max="500" name="mortgage_stress_bps" value="<?= $s['mortgage_stress_bps'] ?? 100 ?>" form="scenario-form-<?= (int)$s['id'] ?>" class="form-control" style="font-size:12px">
+                            <div class="form-text" style="font-size:10px">100 = +1.00%. Private often = 0.</div>
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom:8px">
+                        <label class="form-label" style="font-size:11px">Notes / Broker Reference</label>
+                        <textarea name="notes" form="scenario-form-<?= (int)$s['id'] ?>" class="form-control" rows="2" style="font-size:12px"><?= htmlspecialchars($s['notes'] ?? '') ?></textarea>
+                    </div>
+
+                    <?php if (!empty($s['updated_at'])): ?>
+                    <div style="font-size:10px;color:#aaa">Last saved: <?= date('F j, Y g:i a', strtotime($s['updated_at'])) ?> by <?= htmlspecialchars($s['updated_by'] ?? 'Admin') ?></div>
+                    <?php endif; ?>
+                </td>
+            </tr>
+            <?php endif; ?>
+
+        <?php endforeach; ?>
+        </tbody>
+    </table>
     </div>
 
-    <div class="mb-3">
-        <label class="form-label">Notes / Broker Reference</label>
-        <textarea name="notes" class="form-control" rows="2"><?= htmlspecialchars($fa['notes'] ?? '') ?></textarea>
+    <div style="background:#f9f6f0;border-left:3px solid var(--gold);padding:14px 18px;margin-top:24px;font-size:12px;color:#374151;line-height:1.7">
+        <strong>How scenarios are used:</strong> When a builder opens the Rental / Hold tab on the map panel, they pick a financing path from the dropdown (default is the scenario marked above). The selected scenario's LTC, rate, amortization, cap rate, vacancy, and operational costs drive the pro forma and report. The <strong>Covenant</strong> flag controls whether the Section 219 rental covenant note appears in the report (CMHC MLI Select only).
     </div>
-
-    <?php if (!empty($fa['updated_at'])): ?>
-    <div style="font-size:11px;color:#aaa;margin-bottom:16px">Last saved: <?= date('F j, Y g:i a', strtotime($fa['updated_at'])) ?> by <?= htmlspecialchars($fa['updated_by'] ?? 'Admin') ?></div>
-    <?php endif; ?>
-
-    <div style="background:#f9f6f0;border-left:3px solid var(--gold);padding:14px 18px;margin-bottom:20px;font-size:12px;color:#374151;line-height:1.7">
-        <strong>How these values appear in the Rental Report:</strong> Loan = total cost × LTC%. CMHC premium added → insured loan. Monthly payment via standard amortization formula. NOI = EGI − (vacancy + management + insurance + maintenance + property tax). Cash flow = NOI − annual debt service. Asset sale value = NOI ÷ market cap rate.
-    </div>
-
-    <button type="submit" name="save_financing" class="btn-gold" style="max-width:220px">
-        <i class="fas fa-save me-2"></i>Save MLI Assumptions
-    </button>
-    </form>
 </div>
 
 <?php endif; ?>
@@ -1395,7 +1561,58 @@ function submitChannelA() {
     });
 }
 
-function pill(v,l,bg,c){return '<div class="col-auto"><div style="background:'+bg+';color:'+c+';border-radius:8px;padding:10px 16px;text-align:center;min-width:80px;"><div style="font-size:22px;font-weight:900;">'+v+'</div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;">'+l+'</div></div></div>';}
+// ── Channel A-2 — Detached reference data (same backend, csv_type=detached) ──
+function submitChannelA2() {
+    if (!_chA2_file) { showR('chA2-result','Please select or drop a CSV file first.','err'); return; }
+    var month = document.getElementById('chA2_month').value;
+    var yr    = document.getElementById('chA2_yr_min').value;
+    if (!month) { showR('chA2-result','Please select a data month.','err'); return; }
+
+    var fd = new FormData();
+    fd.append('rebgv_csv', _chA2_file, _chA2_file.name);
+    fd.append('data_month', month);
+    fd.append('csv_type', 'detached');   // ← only difference from Channel A
+    fd.append('yr_blt_min', yr);
+
+    document.getElementById('chA2_progress').style.display = 'block';
+    document.getElementById('chA2_submit').disabled = true;
+    document.getElementById('chA2_preview').style.display = 'none';
+    document.getElementById('chA2-result').innerHTML = '';
+    document.getElementById('chA2_stats').innerHTML = '';
+    document.getElementById('chA2_errors').innerHTML = '';
+
+    var mi = 0;
+    var msgs = ['Reading CSV rows...','Mapping S/A codes...','Calculating $/sqft averages...','Saving reference data...'];
+    var pmsg = document.getElementById('chA2_progress_msg');
+    var tk = setInterval(function(){ pmsg.textContent = msgs[mi++ % msgs.length]; }, 1800);
+
+    fetch('api/plex_upload_a.php', { method:'POST', body:fd })
+    .then(function(r){ if (!r.ok) throw new Error('Server returned ' + r.status); return r.json(); })
+    .then(function(d){
+        clearInterval(tk);
+        document.getElementById('chA2_progress').style.display = 'none';
+        document.getElementById('chA2_submit').disabled = false;
+        if (!d.success) { showR('chA2-result','❌ '+(d.error||'Upload failed.'),'err'); return; }
+        showR('chA2-result','✅ '+(d.message||'Upload complete.'),'ok');
+        document.getElementById('chA2_stats').innerHTML = '<strong>'+d.inserted+'</strong> neighbourhood averages saved · <strong>'+(d.skipped||0)+'</strong> rows skipped';
+        if (d.errors&&d.errors.length) document.getElementById('chA2_errors').innerHTML='<strong>Warnings:</strong><br>'+d.errors.slice(0,10).join('<br>');
+        if (d.rows&&d.rows.length){
+            var h='<table class="preview-table"><thead><tr><th>Address</th><th>COV Neighbourhood</th><th>REBGV Area</th><th>Yr Blt</th><th>$/sqft</th></tr></thead><tbody>';
+            d.rows.forEach(function(r){ h+='<tr><td>'+esc(r.address||'')+'</td><td>'+esc(r.nb_slug||'')+'</td><td>'+esc(r.rebgv_area||'')+'</td><td>'+(r.yr_blt||'—')+'</td><td>'+(r.price_per_sqft?'$'+r.price_per_sqft:'—')+'</td></tr>'; });
+            h+='</tbody></table>';
+            document.getElementById('chA2_table_wrap').innerHTML=h;
+        }
+        document.getElementById('chA2_preview').style.display='block';
+    })
+    .catch(function(e){
+        clearInterval(tk);
+        document.getElementById('chA2_progress').style.display='none';
+        document.getElementById('chA2_submit').disabled=false;
+        showR('chA2-result','Network error: '+e.message,'err');
+    });
+}
+
+
 
 // ── HPI Bulk ──────────────────────────────────────────────────────────────────
 (function(){

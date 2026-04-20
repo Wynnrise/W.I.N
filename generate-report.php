@@ -54,6 +54,44 @@ $pro_forma_path = in_array($_GET['path'] ?? 'strata', ['strata','rental','outloo
 if (empty($pid)) die('PID required.');
 $dev_id = (int)$_SESSION['dev_id'];
 
+// ── Panel override params — passed from the map panel when user has adjusted values ──
+// These are optional. When absent, report uses DB values as normal.
+// land_override:     user-entered acquisition price (replaces BC Assessment)
+// build_psf_override: user-entered build cost $/sqft
+// psf_override:      user-selected HPI $/sqft (set when Detached HPI toggle is ON)
+// psf_mode:          'duplex' (default) or 'detached' (labels change in report)
+$land_override     = isset($_GET['land_override'])     && (int)$_GET['land_override']     > 0 ? (int)$_GET['land_override']         : null;
+$build_psf_override= isset($_GET['build_psf_override'])&& (float)$_GET['build_psf_override']>0 ? (float)$_GET['build_psf_override'] : null;
+$psf_override      = isset($_GET['psf_override'])      && (float)$_GET['psf_override']      >0 ? (float)$_GET['psf_override']       : null;
+$psf_mode          = ($_GET['psf_mode'] ?? 'duplex') === 'detached' ? 'detached' : 'duplex';
+
+// Session NEW — strata construction financing overrides (fractions from URL, e.g. 0.65 = 65%)
+$strata_cfin_ltc_override  = isset($_GET['strata_cfin_ltc'])  && $_GET['strata_cfin_ltc']  !== '' ? (float)$_GET['strata_cfin_ltc']  : null;
+$strata_cfin_rate_override = isset($_GET['strata_cfin_rate']) && $_GET['strata_cfin_rate'] !== '' ? (float)$_GET['strata_cfin_rate'] : null;
+$strata_cfin_term_override = isset($_GET['strata_cfin_term']) && (int)$_GET['strata_cfin_term'] > 0 ? (int)$_GET['strata_cfin_term'] : null;
+// Session 16 — strata All Cash flag (zero out construction financing)
+$strata_all_cash           = isset($_GET['strata_all_cash']) && ($_GET['strata_all_cash'] === '1' || $_GET['strata_all_cash'] === 'true');
+
+// Session NEW — rental has its own independent land + build overrides (separate from strata)
+$rental_land_override      = isset($_GET['rental_land_override'])      && (int)$_GET['rental_land_override']      > 0 ? (int)$_GET['rental_land_override']        : null;
+$rental_build_psf_override = isset($_GET['rental_build_psf_override']) && (float)$_GET['rental_build_psf_override']> 0 ? (float)$_GET['rental_build_psf_override']: null;
+
+// Session C — rental financing scenario + pencil-edit overrides
+$fin_scenario_param = trim($_GET['financing_scenario'] ?? '');
+$fin_ltc_override   = isset($_GET['fin_ltc'])   && $_GET['fin_ltc']   !== '' ? (float)$_GET['fin_ltc']   : null;
+$fin_rate_override  = isset($_GET['fin_rate'])   && $_GET['fin_rate']  !== '' ? (float)$_GET['fin_rate']  : null;
+$fin_amort_override = isset($_GET['fin_amort'])  && (int)$_GET['fin_amort'] > 0 ? (int)$_GET['fin_amort'] : null;
+
+// Session 15 — Standardized Design credit ($35k soft cost savings when builder adopts BC/CMHC pre-approved design)
+$use_std_design = isset($_GET['use_std_design']) && ($_GET['use_std_design'] === '1' || $_GET['use_std_design'] === 'true');
+$std_design_credit = $use_std_design ? 35000 : 0;
+
+$has_panel_overrides = ($land_override !== null || $build_psf_override !== null || $psf_override !== null
+                       || $strata_cfin_ltc_override !== null || $strata_cfin_rate_override !== null || $strata_cfin_term_override !== null
+                       || $strata_all_cash
+                       || $rental_land_override !== null || $rental_build_psf_override !== null
+                       || $fin_ltc_override !== null || $fin_rate_override !== null || $fin_amort_override !== null);
+
 // ── Schema fixes ──────────────────────────────────────────────────────────────
 try { $pdo->exec("ALTER TABLE developers ADD COLUMN IF NOT EXISTS subscription_tier ENUM('free','pro','white_label') DEFAULT 'free', ADD COLUMN IF NOT EXISTS report_logo_path VARCHAR(500) DEFAULT NULL, ADD COLUMN IF NOT EXISTS report_bio TEXT DEFAULT NULL, ADD COLUMN IF NOT EXISTS report_title VARCHAR(100) DEFAULT NULL, ADD COLUMN IF NOT EXISTS daily_report_limit INT DEFAULT 5, ADD COLUMN IF NOT EXISTS bonus_reports INT DEFAULT 0"); } catch(PDOException $e){}
 try { $pdo->exec("ALTER TABLE pdf_log ADD COLUMN IF NOT EXISTS report_id VARCHAR(20) DEFAULT NULL"); } catch(PDOException $e){}
@@ -134,6 +172,9 @@ $easement_present = (bool)($lot['easement_present'] ?? false);
 $easement_types   = $lot['easement_types'] ?? '';
 $assessed_land    = (int)($lot['assessed_land_value'] ?? 0);
 if ($assessed_land===0 && $lot_area_sqm>0) $assessed_land = (int)($lot_area_sqm*10.7639*850);
+// Apply panel land override if present
+$assessed_land_original = $assessed_land;
+if ($land_override !== null) $assessed_land = $land_override;
 $assessment_year  = $lot['assessment_year'] ?? date('Y');
 $nb_slug          = wynston_resolve_slug($lot['neighbourhood_slug'] ?? '');
 
@@ -161,8 +202,53 @@ $rental_units = max($max_units, 2);
 
 // ── Market data ───────────────────────────────────────────────────────────────
 // Sold data
-$ms = $pdo->prepare("SELECT avg_sold_psf_duplex, sales_count_duplex AS sales_count, data_month FROM monthly_market_stats WHERE neighbourhood_slug=? AND is_active=1 AND csv_type IN('duplex','detached') ORDER BY data_month DESC LIMIT 1");
-$ms->execute([$nb_slug]); $market = $ms->fetch();
+// ── Market sold data — 24-month aggregate with fallback to 2020+ ──────────────
+$market = null;
+$market_window = 'none';
+
+// Pass 1: trailing 24 months, sales-weighted
+$ms = $pdo->prepare("
+    SELECT
+        SUM(avg_sold_psf_duplex * sales_count_duplex) / NULLIF(SUM(sales_count_duplex),0) AS avg_sold_psf_duplex,
+        SUM(sales_count_duplex) AS sales_count,
+        MAX(data_month)         AS data_month,
+        MIN(data_month)         AS earliest_month
+    FROM monthly_market_stats
+    WHERE neighbourhood_slug=? AND is_active=1
+      AND csv_type IN('duplex','hpi_duplex')
+      AND avg_sold_psf_duplex>0
+      AND sales_count_duplex>0
+      AND data_month >= DATE_SUB(CURDATE(), INTERVAL 24 MONTH)
+");
+$ms->execute([$nb_slug]);
+$row = $ms->fetch();
+if ($row && (int)($row['sales_count'] ?? 0) > 0) {
+    $market = $row;
+    $market_window = '24mo';
+}
+
+// Pass 2: fallback to 2020+ if 24mo empty
+if (!$market) {
+    $ms2 = $pdo->prepare("
+        SELECT
+            SUM(avg_sold_psf_duplex * sales_count_duplex) / NULLIF(SUM(sales_count_duplex),0) AS avg_sold_psf_duplex,
+            SUM(sales_count_duplex) AS sales_count,
+            MAX(data_month)         AS data_month,
+            MIN(data_month)         AS earliest_month
+        FROM monthly_market_stats
+        WHERE neighbourhood_slug=? AND is_active=1
+          AND csv_type IN('duplex','hpi_duplex')
+          AND avg_sold_psf_duplex>0
+          AND sales_count_duplex>0
+          AND data_month >= '2020-01-01'
+    ");
+    $ms2->execute([$nb_slug]);
+    $row = $ms2->fetch();
+    if ($row && (int)($row['sales_count'] ?? 0) > 0) {
+        $market = $row;
+        $market_window = 'fallback_2020';
+    }
+}
 // Rental data
 $mr = $pdo->prepare("SELECT avg_rent_1br, avg_rent_2br, avg_rent_3br FROM monthly_market_stats WHERE neighbourhood_slug=? AND is_active=1 AND csv_type IN('rental','rebgv_rental') AND (avg_rent_1br>0 OR avg_rent_2br>0 OR avg_rent_3br>0) ORDER BY data_month DESC LIMIT 1");
 $mr->execute([$nb_slug]); $market_rent=$mr->fetch();
@@ -173,9 +259,30 @@ $hpi->execute([$nb_slug]); $hpi_row = $hpi->fetch();
 $metro = $pdo->query("SELECT AVG(price_per_sqft) as p FROM monthly_market_stats WHERE is_active=1 AND csv_type='hpi_duplex' AND price_per_sqft>0 AND data_month>=DATE_SUB(CURDATE(),INTERVAL 3 MONTH)")->fetch();
 $current_psf = (float)($market['avg_sold_psf_duplex'] ?? $hpi_row['price_per_sqft'] ?? $metro['p'] ?? 985);
 $comp_count  = (int)($market['sales_count'] ?? $hpi_row['sales_count'] ?? 0);
-$data_as_of  = !empty($market['data_month']) ? date('F Y', strtotime($market['data_month'])) : (!empty($hpi_row['data_month']) ? date('F Y', strtotime($hpi_row['data_month'])) : 'Metro Vancouver Benchmark');
-$conf_label  = $comp_count>=5 ? 'High Confidence' : ($comp_count>=2 ? 'Moderate Confidence' : 'Indicative');
-$conf_short  = $comp_count>=5 ? 'High' : ($comp_count>=2 ? 'Moderate' : 'Indicative');
+// data_as_of label — show window type so readers know whether it's current or historical
+if ($market_window === '24mo' && !empty($market['data_month'])) {
+    $data_as_of = 'Last 24 months · through ' . date('M Y', strtotime($market['data_month']));
+} elseif ($market_window === 'fallback_2020' && !empty($market['earliest_month']) && !empty($market['data_month'])) {
+    $data_as_of = 'Historical ' . date('M Y', strtotime($market['earliest_month'])) . ' – ' . date('M Y', strtotime($market['data_month']));
+} elseif (!empty($market['data_month'])) {
+    $data_as_of = date('F Y', strtotime($market['data_month']));
+} elseif (!empty($hpi_row['data_month'])) {
+    $data_as_of = date('F Y', strtotime($hpi_row['data_month']));
+} else {
+    $data_as_of = 'Metro Vancouver Benchmark';
+}
+// Apply panel HPI override if user selected Detached HPI in panel
+$current_psf_original = $current_psf;
+if ($psf_override !== null) $current_psf = $psf_override;
+$psf_label   = $psf_mode === 'detached' ? 'New Detached HPI' : 'New Duplex Only HPI';
+// Confidence tier reflects trailing 24 months. Fallback to 2020+ is always Indicative.
+if ($market_window === 'fallback_2020') {
+    $conf_label = 'Indicative';
+    $conf_short = 'Indicative';
+} else {
+    $conf_label = $comp_count>=10 ? 'High Confidence' : ($comp_count>=4 ? 'Moderate Confidence' : 'Indicative');
+    $conf_short = $comp_count>=10 ? 'High'            : ($comp_count>=4 ? 'Moderate'            : 'Indicative');
+}
 
 // ── DOM ───────────────────────────────────────────────────────────────────────
 $dom_data=[];
@@ -225,24 +332,83 @@ if (count($comps)<3) {
 $bcs=$pdo->prepare("SELECT cost_standard_low,cost_standard_high,dcl_city,dcl_utilities,metro_dcc_per_unit FROM construction_costs WHERE neighbourhood_slug=? ORDER BY updated_at DESC LIMIT 1");
 $bcs->execute([$nb_slug]); $bc=$bcs->fetch();
 $build_psf      = $bc ? (((float)$bc['cost_standard_low']+(float)$bc['cost_standard_high'])/2) : 420;
+// Apply panel build cost override if present
+$build_psf_original = $build_psf;
+if ($build_psf_override !== null) $build_psf = $build_psf_override;
+
+// ── Pro forma label helpers — show adjusted note when panel overrides active ──
+$land_label  = $land_override !== null
+    ? 'Land — Adjusted Price <span style="font-size:9px;color:#b45309">(BC Assessment: '.money($assessed_land_original).')</span>'
+    : 'Land — BC Assessment '.$assessment_year;
+$build_label_fn = function($sqft) use ($build_psf, $build_psf_original, $build_psf_override) {
+    $note = $build_psf_override !== null
+        ? ' <span style="font-size:9px;color:#b45309">(default: $'.number_format($build_psf_original,0).'/sqft)</span>'
+        : '';
+    return number_format($sqft).' sqft × $'.number_format($build_psf,0).'/sqft'.$note;
+};
 $dcl_city_rate  = ($bc && (float)$bc['dcl_city']>0)        ? (float)$bc['dcl_city']        : 4.63;
 $dcl_util_rate  = ($bc && (float)$bc['dcl_utilities']>0)   ? (float)$bc['dcl_utilities']   : 2.90;
 $metro_dcc_unit = ($bc && (int)$bc['metro_dcc_per_unit']>0) ? (int)$bc['metro_dcc_per_unit'] : 29243;
 
-// ── CMHC MLI Select financing assumptions ────────────────────────────────────
+// ── Rental financing assumptions — scenario-aware (Session C) ────────────────
+// Fallback chain: requested scenario_key → is_default=1 → any row
 $fa = null;
-try { $fa = $pdo->query("SELECT * FROM financing_assumptions ORDER BY updated_at DESC LIMIT 1")->fetch(); } catch(PDOException $e){}
+try {
+    if ($fin_scenario_param !== '') {
+        $fa_q = $pdo->prepare("SELECT * FROM financing_assumptions WHERE scenario_key = ? LIMIT 1");
+        $fa_q->execute([$fin_scenario_param]);
+        $fa = $fa_q->fetch();
+    }
+    if (!$fa) {
+        $fa = $pdo->query("SELECT * FROM financing_assumptions WHERE is_default = 1 LIMIT 1")->fetch();
+    }
+    if (!$fa) {
+        $fa = $pdo->query("SELECT * FROM financing_assumptions ORDER BY updated_at DESC LIMIT 1")->fetch();
+    }
+} catch(PDOException $e){}
+
+$fa_scenario_key    = $fa['scenario_key']        ?? 'cmhc_mli';
+$fa_scenario_label  = $fa['scenario_label']      ?? 'CMHC MLI Select';
+$fa_is_all_cash     = ($fa_scenario_key === 'all_cash');
+$fa_requires_covenant = (bool)($fa['requires_covenant'] ?? ($fa_scenario_key === 'cmhc_mli' ? 1 : 0));
+
 $fa_ltc        = (float)($fa['ltc_pct']              ?? 75)    / 100;
 $fa_rate       = (float)($fa['interest_rate_pct']    ?? 5.25)  / 100;
 $fa_amort      = (int)  ($fa['amortization_years']   ?? 40);
 $fa_ins_prem   = (float)($fa['insurance_prem_pct']   ?? 4.00)  / 100;
+
+// Apply pencil-edit overrides from URL (fractions — same as feasibility.php)
+if ($fin_ltc_override   !== null) $fa_ltc   = $fin_ltc_override;
+if ($fin_rate_override  !== null) $fa_rate  = $fin_rate_override;
+if ($fin_amort_override !== null) $fa_amort = $fin_amort_override;
+
+// All Cash: force everything to zero regardless of DB values or overrides
+if ($fa_is_all_cash) {
+    $fa_ltc      = 0;
+    $fa_rate     = 0;
+    $fa_amort    = 0;
+    $fa_ins_prem = 0;
+}
+
 $fa_cap_rate   = (float)($fa['market_cap_rate_pct']  ?? 4.50)  / 100;
 $fa_vacancy    = (float)($fa['vacancy_rate_pct']     ?? 5.00)  / 100;
 $fa_mgmt       = (float)($fa['mgmt_fee_pct']         ?? 8.00)  / 100;
 $fa_ins_unit   = (float)($fa['insurance_per_unit']   ?? 150);
 $fa_maint_unit = (float)($fa['maintenance_per_unit'] ?? 900);
 $fa_tax_rate   = (float)($fa['property_tax_rate']    ?? 0.003);
-$fa_name       = $fa['assumption_name'] ?? 'CMHC MLI Select';
+$fa_name       = $fa_scenario_label; // alias for backward compat
+
+// NEW — rent growth / opex growth / mortgage stress for 10-yr projection
+$fa_rent_growth    = (float)($fa['rent_growth_pct']      ?? 3.00) / 100;
+$fa_opex_growth    = (float)($fa['opex_growth_pct']      ?? 2.50) / 100;
+$fa_stress_mode    = $fa['mortgage_stress_mode']         ?? 'fixed';
+$fa_stress_bps     = (int)  ($fa['mortgage_stress_bps']  ?? 100);
+
+// All Cash: no debt means no stress test
+if ($fa_is_all_cash) {
+    $fa_stress_mode = 'fixed';
+    $fa_stress_bps  = 0;
+}
 
 // ── Shared cost base (both paths use same cost structure) ─────────────────────
 // Strata uses 0.70 FSR, Rental/Outlook uses 1.00 FSR
@@ -257,6 +423,11 @@ $rental_buildable_sqft = round($lot_area_sqm * $fsr_rental * 10.7639);
 $buildable_sqft = $is_rental_path ? $rental_buildable_sqft : $strata_buildable_sqft;
 $buildable_sqm  = $lot_area_sqm * ($is_rental_path ? $fsr_rental : $fsr_strata);
 
+// ── Session NEW: Rental-independent land + build (separate from strata) ───────
+// Rental has its own override params. If not overridden, defaults to same as strata base (BC Assessment / default build psf).
+$rental_assessed_land = $rental_land_override      ?? $assessed_land_original;  // rental uses ORIGINAL land unless rental-specific override set
+$rental_build_psf     = $rental_build_psf_override ?? $build_psf_original;      // rental uses ORIGINAL psf unless rental-specific override set
+
 // ── Project costs — STRATA ────────────────────────────────────────────────────
 $s_hard_build  = $strata_buildable_sqft * $build_psf;
 $s_dcl_city    = $strata_buildable_sqft * $dcl_city_rate;
@@ -264,17 +435,33 @@ $s_dcl_util    = $strata_buildable_sqft * $dcl_util_rate;
 $s_metro_dcc   = $metro_dcc_unit * max($max_units, 1);
 $s_permit_fees = ($s_hard_build / 1000) * 13.70;
 $s_peat_cost   = $peat_zone ? 150000 : 0;
-$s_total_cost  = $assessed_land + $s_hard_build + $s_dcl_city + $s_dcl_util + $s_metro_dcc + $s_permit_fees + $s_peat_cost;
+$s_cost_before_fin = $assessed_land + $s_hard_build + $s_dcl_city + $s_dcl_util + $s_metro_dcc + $s_permit_fees + $s_peat_cost - $std_design_credit;
+
+// Session NEW: Strata Construction Financing
+// Defaults: 65% LTC, 7% rate, 15 months. Builder can override any on the panel.
+// Session 16: $strata_all_cash = true → zero construction financing
+$s_cfin_ltc  = $strata_cfin_ltc_override  ?? 0.65;
+$s_cfin_rate = $strata_cfin_rate_override ?? 0.07;
+$s_cfin_term = $strata_cfin_term_override ?? 15;
+if ($strata_all_cash) {
+    $s_construction_fin = 0.0;
+} else {
+    // Interest-only during construction: avg balance = full draw / 2
+    $s_construction_fin = $s_cost_before_fin * $s_cfin_ltc * $s_cfin_rate * ($s_cfin_term / 12) * 0.5;
+}
+
+$s_total_cost  = $s_cost_before_fin + $s_construction_fin;
 
 // ── Project costs — RENTAL ────────────────────────────────────────────────────
+// Uses rental-independent land + build if overridden separately
 $r_density_bonus = ($lot_area_sqm * 0.30 * 10.7639) * 40;
-$r_hard_build    = $rental_buildable_sqft * $build_psf;
+$r_hard_build    = $rental_buildable_sqft * $rental_build_psf;
 $r_dcl_city      = $rental_buildable_sqft * $dcl_city_rate;
 $r_dcl_util      = $rental_buildable_sqft * $dcl_util_rate;
 $r_metro_dcc     = $metro_dcc_unit * $rental_units;
 $r_permit_fees   = ($r_hard_build / 1000) * 13.70;
 $r_peat_cost     = $peat_zone ? 150000 : 0;
-$r_total_cost    = $assessed_land + $r_hard_build + $r_density_bonus + $r_dcl_city + $r_dcl_util + $r_metro_dcc + $r_permit_fees + $r_peat_cost;
+$r_total_cost    = $rental_assessed_land + $r_hard_build + $r_density_bonus + $r_dcl_city + $r_dcl_util + $r_metro_dcc + $r_permit_fees + $r_peat_cost - $std_design_credit;
 
 // Active path total cost
 $total_cost    = $is_rental_path ? $r_total_cost : $s_total_cost;
@@ -285,6 +472,9 @@ $dcl_util      = $is_rental_path ? $r_dcl_util : $s_dcl_util;
 $permit_fees   = $is_rental_path ? $r_permit_fees : $s_permit_fees;
 $metro_dcc     = $is_rental_path ? $r_metro_dcc : $s_metro_dcc;
 $peat_cost     = $peat_zone ? 150000 : 0;
+
+// Display land cost for rental (used by rental page 5B-2)
+$rental_land_display = $rental_assessed_land;
 
 // ── STRATA exit calculations ──────────────────────────────────────────────────
 $s_saleable    = $strata_buildable_sqft * 0.85;
@@ -335,20 +525,29 @@ $r_total_opex = $r_prop_tax + $r_insurance + $r_maint + $r_mgmt_fee;
 // NOI
 $r_noi = $r_egi - $r_total_opex;
 
-// CMHC MLI Select mortgage
-$r_loan_base   = $r_total_cost * $fa_ltc;
-$r_ins_amount  = $r_loan_base * $fa_ins_prem;
-$r_loan_total  = $r_loan_base + $r_ins_amount;       // insured loan amount
-$r_monthly_rate = $fa_rate / 12;
-$r_n_payments   = $fa_amort * 12;
-// Standard amortizing mortgage payment formula
-if ($r_monthly_rate > 0) {
-    $r_monthly_pmt = $r_loan_total * ($r_monthly_rate * pow(1+$r_monthly_rate,$r_n_payments)) / (pow(1+$r_monthly_rate,$r_n_payments)-1);
+// Rental financing — scenario-aware (Session C)
+if ($fa_is_all_cash) {
+    // All Cash: no loan, no debt, equity = full project cost
+    $r_loan_base   = 0;
+    $r_ins_amount  = 0;
+    $r_loan_total  = 0;
+    $r_monthly_pmt = 0;
+    $r_annual_debt = 0;
+    $r_equity      = $r_total_cost;
 } else {
-    $r_monthly_pmt = $r_loan_total / $r_n_payments;
+    $r_loan_base   = $r_total_cost * $fa_ltc;
+    $r_ins_amount  = ($fa_scenario_key === 'cmhc_mli') ? $r_loan_base * $fa_ins_prem : 0;
+    $r_loan_total  = $r_loan_base + $r_ins_amount;
+    $r_monthly_rate = $fa_rate / 12;
+    $r_n_payments   = $fa_amort * 12;
+    if ($r_monthly_rate > 0 && $r_n_payments > 0) {
+        $r_monthly_pmt = $r_loan_total * ($r_monthly_rate * pow(1+$r_monthly_rate,$r_n_payments)) / (pow(1+$r_monthly_rate,$r_n_payments)-1);
+    } else {
+        $r_monthly_pmt = ($r_n_payments > 0) ? $r_loan_total / $r_n_payments : 0;
+    }
+    $r_annual_debt  = $r_monthly_pmt * 12;
+    $r_equity       = $r_total_cost * (1 - $fa_ltc);
 }
-$r_annual_debt  = $r_monthly_pmt * 12;
-$r_equity       = $r_total_cost * (1 - $fa_ltc);
 
 // Cash flow & returns
 $r_cash_flow    = $r_noi - $r_annual_debt;
@@ -357,6 +556,58 @@ $r_cap_rate     = $r_total_cost > 0 ? ($r_noi / $r_total_cost) * 100 : 0;
 $r_payback      = $r_noi > 0 ? $r_total_cost / $r_noi : 0;
 $r_asset_value  = $fa_cap_rate > 0 ? $r_noi / $fa_cap_rate : 0;
 $r_value_vs_cost = $r_asset_value - $r_total_cost;  // day-1 equity gain/loss
+
+// NEW — Year 1 / Year 5 / Year 10 cash flow projection
+// Compounds rent growth and opex growth, applies optional Y5 mortgage stress.
+// Keeps debt service flat by default; stress mode bumps it by stress_bps at Y5.
+$r_proj_years = [1, 5, 10];
+$r_projections = [];
+$r_year_to_positive = null;
+
+// Pre-compute Y1 baseline inputs
+$r_gross_annual_y1 = $r_gross_annual;
+$r_opex_y1         = $r_total_opex;  // note: this is total opex, not rate-based
+$r_debt_y1         = $r_annual_debt;
+
+// Apply mortgage stress at Y5 if enabled (~13% increase per 1% rate bump)
+$r_stress_bump = 0.0;
+if ($fa_stress_mode === 'stress_y5' && $fa_stress_bps > 0) {
+    $r_stress_bump = ($fa_stress_bps / 100) * 0.13;
+}
+
+foreach ($r_proj_years as $y) {
+    $yrs_elapsed = $y - 1;
+    $gross = $r_gross_annual_y1 * pow(1 + $fa_rent_growth, $yrs_elapsed);
+    $opex  = $r_opex_y1 * pow(1 + $fa_opex_growth, $yrs_elapsed);
+    $egi   = $gross * (1 - $fa_vacancy);
+    $noi   = $egi - $opex;
+    $debt  = ($y >= 5) ? $r_debt_y1 * (1 + $r_stress_bump) : $r_debt_y1;
+    $cf    = $noi - $debt;
+    $r_projections[$y] = [
+        'gross_annual' => $gross,
+        'opex'         => $opex,
+        'egi'          => $egi,
+        'noi'          => $noi,
+        'debt'         => $debt,
+        'cash_flow'    => $cf,
+    ];
+}
+
+// Scan 1-30 to find first positive cash flow year
+$_gm = $r_gross_annual_y1;
+$_ox = $r_opex_y1;
+$_ds = $r_debt_y1;
+for ($_y = 1; $_y <= 30; $_y++) {
+    $_egi = $_gm * (1 - $fa_vacancy);
+    $_noi = $_egi - $_ox;
+    if ($_y == 5 && $r_stress_bump > 0) { $_ds = $r_debt_y1 * (1 + $r_stress_bump); }
+    if (($_noi - $_ds) > 0) { $r_year_to_positive = $_y; break; }
+    $_gm *= (1 + $fa_rent_growth);
+    $_ox *= (1 + $fa_opex_growth);
+}
+
+// Break-even occupancy: % of gross rent needed just to cover opex
+$r_break_even_occ = $r_gross_annual_y1 > 0 ? ($r_opex_y1 / $r_gross_annual_y1) * 100 : 0;
 
 // Active path summary vars (used by shared sections like cover, back cover)
 if ($pro_forma_path === 'strata') {
@@ -584,7 +835,7 @@ html,body{background:#d9dadb;font-family:'Work Sans',sans-serif;font-size:13px;c
     width:100%;height:340px;
     background:var(--primary-container);
     display:flex;align-items:center;justify-content:center;
-    color:rgba(255,255,255,.2);font-size:12px;letter-spacing:.1em;
+    color:rgba(255,255,255,.45);font-size:12px;letter-spacing:.1em;
 }
 .cover-stats{
     display:grid;grid-template-columns:1fr 1fr 1fr;
@@ -596,16 +847,16 @@ html,body{background:#d9dadb;font-family:'Work Sans',sans-serif;font-size:13px;c
     border-right:1px solid rgba(255,255,255,.1);
 }
 .cover-stat:last-child{border-right:none}
-.cover-stat-label{font-size:9px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:8px}
+.cover-stat-label{font-size:9px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.55);margin-bottom:8px}
 .cover-stat-val{font-family:'Noto Serif',serif;font-size:26px;color:#fff;font-weight:400}
-.cover-stat-sub{font-size:10px;color:rgba(255,255,255,.35);margin-top:4px}
+.cover-stat-sub{font-size:10px;color:rgba(255,255,255,.5);margin-top:4px}
 .cover-footer{
     margin-top:auto;padding-top:24px;
     border-top:1px solid rgba(255,255,255,.08);
     display:flex;justify-content:space-between;align-items:flex-end;
     padding-bottom:4px;
 }
-.cover-footer-left{font-size:10px;color:rgba(255,255,255,.25);line-height:1.6;max-width:420px}
+.cover-footer-left{font-size:10px;color:rgba(255,255,255,.5);line-height:1.6;max-width:420px}
 .cover-badges{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .badge-elig{
     font-family:'Work Sans',sans-serif;font-size:10px;font-weight:600;
@@ -632,7 +883,7 @@ html,body{background:#d9dadb;font-family:'Work Sans',sans-serif;font-size:13px;c
     font-family:'Noto Serif',serif;font-style:italic;
     font-size:32px;color:#fff;font-weight:400;
 }
-.page-header-meta{font-size:10px;color:rgba(255,255,255,.35);letter-spacing:.05em}
+.page-header-meta{font-size:10px;color:rgba(255,255,255,.55);letter-spacing:.05em}
 
 /* ─── PAGE BODY ──────────────────────────────────────────────────────────────── */
 .page-body{padding:40px 64px 48px}
@@ -672,11 +923,11 @@ html,body{background:#d9dadb;font-family:'Work Sans',sans-serif;font-size:13px;c
     font-size:22px;color:var(--tertiary-fixed);margin-bottom:20px;
 }
 .pathway-grid{display:grid;grid-template-columns:1fr 1fr;gap:40px}
-.pathway-label{font-size:9px;font-weight:600;letter-spacing:.2em;text-transform:uppercase;color:rgba(255,255,255,.35);margin-bottom:6px}
+.pathway-label{font-size:9px;font-weight:600;letter-spacing:.2em;text-transform:uppercase;color:rgba(255,255,255,.55);margin-bottom:6px}
 .pathway-name{font-family:'Noto Serif',serif;font-size:20px;color:var(--tertiary-fixed);margin-bottom:16px}
 .pathway-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.06);font-size:12px}
 .pathway-row:last-child{border-bottom:none}
-.pathway-row .k{color:rgba(255,255,255,.4)}
+.pathway-row .k{color:rgba(255,255,255,.55)}
 .pathway-row .v{color:#fff;font-weight:500}
 .dark-block-note{
     margin-top:20px;padding:14px 16px;
@@ -739,11 +990,11 @@ html,body{background:#d9dadb;font-family:'Work Sans',sans-serif;font-size:13px;c
 .psf-cell{padding:24px;background:var(--surface-low);border-right:1px solid rgba(0,0,0,.04)}
 .psf-cell:last-child{border-right:none;background:var(--primary)}
 .psf-label{font-size:9px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:var(--on-surface-var);margin-bottom:10px}
-.psf-cell:last-child .psf-label{color:rgba(255,255,255,.4)}
+.psf-cell:last-child .psf-label{color:rgba(255,255,255,.55)}
 .psf-val{font-family:'Noto Serif',serif;font-size:32px;color:var(--on-surface)}
 .psf-cell:last-child .psf-val{color:var(--tertiary-fixed)}
 .psf-note{font-size:10px;color:var(--on-surface-var);margin-top:6px}
-.psf-cell:last-child .psf-note{color:rgba(255,255,255,.35)}
+.psf-cell:last-child .psf-note{color:rgba(255,255,255,.5)}
 
 /* ─── MARGIN CALLOUT ────────────────────────────────────────────────────────── */
 .margin-callout{
@@ -846,23 +1097,23 @@ table.dt tr:last-child td{border-bottom:none}
 /* ─── BACK COVER ─────────────────────────────────────────────────────────────── */
 .back-cover{background:var(--primary);color:#fff;height:1056px;padding:56px 64px;display:flex;flex-direction:column;overflow:hidden}
 .back-logo{font-family:'Noto Serif',serif;font-style:italic;font-size:28px;color:var(--tertiary-fixed);letter-spacing:.2em;margin-bottom:4px}
-.back-tagline{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:rgba(255,255,255,.25);margin-bottom:0}
+.back-tagline{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:rgba(255,255,255,.5);margin-bottom:0}
 .back-agent-block{display:flex;gap:32px;align-items:flex-start;padding:28px 0;border-top:1px solid rgba(255,255,255,.1);border-bottom:1px solid rgba(255,255,255,.1);margin-top:24px}
 .back-logo-img{max-width:100px;max-height:100px;object-fit:contain;mix-blend-mode:screen;flex-shrink:0}
 .back-logo-ph{width:80px;height:80px;background:var(--primary-container);border:1px solid rgba(255,255,255,.1);flex-shrink:0}
 .back-agent-name{font-family:'Noto Serif',serif;font-size:20px;color:var(--tertiary-fixed);margin-bottom:4px}
-.back-agent-title{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.35);margin-bottom:12px}
+.back-agent-title{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.55);margin-bottom:12px}
 .back-agent-bio{font-size:11px;color:rgba(255,255,255,.6);line-height:1.6}
 .back-contacts{margin-top:20px;display:flex;flex-direction:column;gap:6px}
 .back-contact-line{font-size:11px;color:rgba(255,255,255,.5)}
-.back-contact-line span{color:rgba(255,255,255,.25);margin-right:8px;font-size:9px;letter-spacing:.1em;text-transform:uppercase}
+.back-contact-line span{color:rgba(255,255,255,.5);margin-right:8px;font-size:9px;letter-spacing:.1em;text-transform:uppercase}
 .back-nextstep{margin-top:20px;padding:20px 24px;background:var(--primary-container);border-left:2px solid var(--tertiary-fixed);flex-shrink:0}
-.back-nextstep-label{font-size:9px;font-weight:600;letter-spacing:.2em;text-transform:uppercase;color:rgba(255,255,255,.35);margin-bottom:8px}
+.back-nextstep-label{font-size:9px;font-weight:600;letter-spacing:.2em;text-transform:uppercase;color:rgba(255,255,255,.55);margin-bottom:8px}
 .back-nextstep-text{font-size:13px;color:rgba(255,255,255,.8);line-height:1.6}
 .back-sources{margin-top:auto;padding-top:20px;border-top:1px solid rgba(255,255,255,.08);flex-shrink:0}
-.back-sources-label{font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.25);margin-bottom:6px}
-.back-sources-text{font-size:10px;color:rgba(255,255,255,.3);line-height:1.6}
-.back-disclaimer{font-size:9px;color:rgba(255,255,255,.2);line-height:1.6;margin-top:8px}
+.back-sources-label{font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.5);margin-bottom:6px}
+.back-sources-text{font-size:10px;color:rgba(255,255,255,.55);line-height:1.6}
+.back-disclaimer{font-size:9px;color:rgba(255,255,255,.5);line-height:1.6;margin-top:8px}
 .back-gold-bar{background:var(--tertiary-fixed);height:4px;margin:20px -64px 0;flex-shrink:0}
 
 /* ─── INLINE CALLOUT BOXES ───────────────────────────────────────────────────── */
@@ -971,8 +1222,16 @@ table.dt tr:last-child td{border-bottom:none}
         <div class="cover-footer-left">
             Prepared for <?= htmlspecialchars($prepared_for) ?> · Report <?= $report_id ?> · <?= date('F j, Y') ?><br>
             Confidential. For informational purposes only. Not financial or investment advice.
+            <?php if ($has_panel_overrides): ?>
+            <br><span style="color:rgba(255,200,100,.6)">✎ This report uses user-adjusted inputs:
+            <?php $adj=[];
+            if($land_override!==null) $adj[]='land cost $'.number_format($land_override).' (BC Assessment: $'.number_format($assessed_land_original).')';
+            if($build_psf_override!==null) $adj[]='build cost $'.number_format($build_psf_override,0).'/sqft (default: $'.number_format($build_psf_original,0).')';
+            if($psf_override!==null) $adj[]='exit $/sqft uses '.$psf_label.' ($'.number_format($psf_override,0).'/sqft)';
+            echo htmlspecialchars(implode('; ',$adj));?>.</span>
+            <?php endif; ?>
         </div>
-        <div style="font-size:10px;color:rgba(255,255,255,.2);text-align:right;line-height:1.6">
+        <div style="font-size:10px;color:rgba(255,255,255,.5);text-align:right;line-height:1.6">
             Data as of <?= htmlspecialchars($data_as_of) ?><br>
             <?= htmlspecialchars($nb_display) ?> · Vancouver, BC
         </div>
@@ -1193,16 +1452,6 @@ table.dt tr:last-child td{border-bottom:none}
             </div>
         </li>
         <?php endif; ?>
-
-        <?php if(!empty($blueprint)): ?>
-        <li class="constraint-item" style="padding-top:20px;margin-top:4px">
-            <div class="constraint-icon clear">↗</div>
-            <div>
-                <div class="constraint-title">Standardized Design Match</div>
-                <div class="constraint-sub"><?= htmlspecialchars($blueprint['catalogue']) ?> · <?= htmlspecialchars($blueprint['design_id']) ?> — <?= htmlspecialchars($blueprint['design_name']) ?>. Using this plan can save ~$35,000 in architectural fees and up to 4 months in permit time.</div>
-            </div>
-        </li>
-        <?php endif; ?>
     </ul>
 
     <div class="tonal-divider"></div>
@@ -1261,7 +1510,121 @@ table.dt tr:last-child td{border-bottom:none}
 
 <!-- ═══════════════════════════════════════════════════════════════════════════
      PAGE 4 — MARKET ANALYSIS
+     Path-aware: strata shows sold $/sqft + DOM + comps
+                 rental shows rent comparables + CMHC variance + build cost context
 ═══════════════════════════════════════════════════════════════════════════ -->
+<?php if ($pro_forma_path === 'rental'): ?>
+
+<!-- ───────── PAGE 4 (RENTAL) — RENTAL MARKET ANALYSIS ───────── -->
+<div class="page">
+<div class="page-header">
+    <div class="page-header-title">Rental Market Analysis.</div>
+    <div class="page-header-meta"><?= htmlspecialchars($nb_display) ?> · <?= htmlspecialchars($data_as_of) ?></div>
+</div>
+
+<!-- Three-number row: Build Cost / Current Rent (weighted avg) / Projected 5yr Rent -->
+<?php
+// Calculate weighted avg monthly rent across all units in the mix (by count)
+$_total_units_pg4 = max(1, $rental_units);
+$_wavg_rent = 0;
+foreach ($rental_rows as $_rr) {
+    $_wavg_rent += $_rr['curr'] * $_rr['units'];
+}
+$_wavg_rent = $_wavg_rent / $_total_units_pg4;
+
+// 5yr projected weighted rent using admin rent growth setting
+$_wavg_rent_5yr = $_wavg_rent * pow(1 + $fa_rent_growth, 5);
+$_wavg_rent_10yr = $_wavg_rent * pow(1 + $fa_rent_growth, 10);
+?>
+<div class="psf-trio">
+    <div class="psf-cell">
+        <div class="psf-label">Build Cost</div>
+        <div class="psf-val"><?= money($build_psf) ?></div>
+        <div class="psf-note">/ sqft · current estimate<?= $build_psf_override!==null?' <span style="color:#b45309">(adjusted)</span>':'' ?></div>
+    </div>
+    <div class="psf-cell">
+        <div class="psf-label">Avg Unit Rent</div>
+        <div class="psf-val"><?= money($_wavg_rent) ?></div>
+        <div class="psf-note">/ month · weighted across <?= $_total_units_pg4 ?> units</div>
+    </div>
+    <div class="psf-cell">
+        <div class="psf-label">Projected Year 5</div>
+        <div class="psf-val"><?= money($_wavg_rent_5yr) ?></div>
+        <div class="psf-note">/ month · at <?= number_format($fa_rent_growth*100,1) ?>% annual growth</div>
+    </div>
+</div>
+
+<!-- Margin callout: NOI vs total project cost -->
+<div class="margin-callout">
+    <div class="margin-callout-label">Stabilized yield on cost</div>
+    <div style="display:flex;align-items:baseline">
+        <div class="margin-callout-val"><?= pct($r_cap_rate) ?></div>
+        <div class="margin-callout-delta <?= $r_cap_rate>=($fa_cap_rate*100)?'delta-up':'delta-dn' ?>">
+            · <?= $r_cap_rate>=($fa_cap_rate*100)?'▲ above':'▼ below' ?> <?= number_format($fa_cap_rate*100,2) ?>% market cap rate
+        </div>
+    </div>
+</div>
+
+<div class="page-body tight">
+
+<!-- Rent comparables table — by bedroom type -->
+<div class="label-xs" style="margin-bottom:12px">Rental Comparables — <?= htmlspecialchars($nb_display) ?> · <?= htmlspecialchars($data_as_of) ?></div>
+<table class="dt" style="margin-bottom:20px">
+    <thead>
+        <tr>
+            <th>Bedroom Type</th>
+            <th>Units in Mix</th>
+            <th>Current Market Rent</th>
+            <th>CMHC Benchmark</th>
+            <th>Variance</th>
+            <th>Signal</th>
+        </tr>
+    </thead>
+    <tbody>
+        <?php foreach($rental_rows as $rr):
+            $var = $rr['cmhc'] > 0 ? (($rr['curr'] - $rr['cmhc']) / $rr['cmhc']) * 100 : 0;
+            $signal_label = $var > 2 ? 'Above benchmark — hot market' : ($var < -2 ? 'Below benchmark — verify' : 'At benchmark');
+            $signal_class = $var > 2 ? 'dt-pass' : ($var < -2 ? 'dt-warn' : 'dt-neutral');
+        ?>
+        <tr>
+            <td style="font-weight:500"><?= htmlspecialchars($rr['t']) ?></td>
+            <td style="color:var(--on-surface-var)"><?= $rr['units'] ?> unit<?= $rr['units']>1?'s':'' ?></td>
+            <td class="dt-mono"><?= money($rr['curr']) ?>/mo</td>
+            <td class="dt-mono"><?= money($rr['cmhc']) ?>/mo</td>
+            <td class="<?= $signal_class ?>"><?= $var>=0?'+':'' ?><?= pct($var) ?></td>
+            <td class="<?= $signal_class ?>" style="font-size:11px"><?= $signal_label ?></td>
+        </tr>
+        <?php endforeach; ?>
+    </tbody>
+</table>
+
+<!-- Income context strip -->
+<div class="label-xs" style="margin-bottom:12px">Rental Income Context</div>
+<div style="display:grid;grid-template-columns:repeat(3,1fr);background:var(--surface-low);margin-bottom:20px">
+    <div class="metric-cell">
+        <div class="label-xs">Gross Monthly</div>
+        <div class="metric-val" style="font-size:20px"><?= money($r_gross_monthly) ?></div>
+        <div class="metric-sub">all <?= $rental_units ?> units, Year 1</div>
+    </div>
+    <div class="metric-cell">
+        <div class="label-xs">Annual NOI</div>
+        <div class="metric-val" style="font-size:20px"><?= money($r_noi) ?></div>
+        <div class="metric-sub">after vacancy + opex</div>
+    </div>
+    <div class="metric-cell">
+        <div class="label-xs">Year 10 Projection</div>
+        <div class="metric-val" style="font-size:20px"><?= money($r_projections[10]['noi']) ?></div>
+        <div class="metric-sub">NOI at <?= number_format($fa_rent_growth*100,1) ?>% rent growth</div>
+    </div>
+</div>
+
+<div style="font-size:10px;color:var(--on-surface-var);margin-top:10px">Source: Wynston Rent Index · <?= htmlspecialchars($nb_display) ?>. This is not a professional appraisal.</div>
+
+</div>
+</div><!-- /page 4 rental -->
+
+<?php else: // strata or outlook — keep original Market Analysis page ?>
+
 <div class="page">
 <div class="page-header">
     <div class="page-header-title">Market Analysis.</div>
@@ -1273,12 +1636,12 @@ table.dt tr:last-child td{border-bottom:none}
     <div class="psf-cell">
         <div class="psf-label">Build Cost</div>
         <div class="psf-val"><?= money($build_psf) ?></div>
-        <div class="psf-note">/ sqft · current estimate</div>
+        <div class="psf-note">/ sqft · current estimate<?= $build_psf_override!==null?' <span style="color:#b45309">(adjusted)</span>':'' ?></div>
     </div>
     <div class="psf-cell">
-        <div class="psf-label">Finished Sale Price</div>
+        <div class="psf-label"><?= htmlspecialchars($psf_label) ?></div>
         <div class="psf-val"><?= money($current_psf) ?></div>
-        <div class="psf-note">/ sqft · <?= htmlspecialchars($data_as_of) ?></div>
+        <div class="psf-note">/ sqft · <?= htmlspecialchars($data_as_of) ?><?= $psf_override!==null?' <span style="color:#b45309">(adjusted)</span>':'' ?></div>
     </div>
     <div class="psf-cell">
         <div class="psf-label">Wynston Outlook</div>
@@ -1310,9 +1673,10 @@ table.dt tr:last-child td{border-bottom:none}
     </div>
     <div style="flex:1;border-left:1px solid rgba(0,0,0,.06);padding-left:20px">
         <div style="font-size:11px;color:var(--on-surface-var);line-height:1.7;margin-top:4px">
-            <?php if($conf_short==='High'):?>Based on <?= $comp_count ?> comparable sales in <?= htmlspecialchars($nb_display) ?> — REBGV MLS, new builds 2024+. High confidence figures.
-            <?php elseif($conf_short==='Moderate'):?>Based on <?= $comp_count ?> comparable sale<?= $comp_count!==1?'s':''?> in <?= htmlspecialchars($nb_display) ?>. Some figures use Metro Vancouver benchmarks as supplementary data.
-            <?php else:?>Fewer than 2 local comparable sales. Pro forma uses Metro Vancouver benchmarks ($<?= number_format($current_psf) ?>/sqft). Upload REBGV data via admin to improve accuracy.<?php endif;?>
+            <?php if($market_window==='fallback_2020'):?>Limited recent duplex activity in <?= htmlspecialchars($nb_display) ?>. Figures are indicative — verify against current market conditions.
+            <?php elseif($conf_short==='High'):?>Strong recent market signal in <?= htmlspecialchars($nb_display) ?>. <?= htmlspecialchars($psf_label) ?>: $<?= number_format($current_psf) ?>/sqft.
+            <?php elseif($conf_short==='Moderate'):?>Moderate recent activity in <?= htmlspecialchars($nb_display) ?>. Figures carry wider variance.
+            <?php else:?>Thin recent data for <?= htmlspecialchars($nb_display) ?>. Figures are indicative and should be independently verified.<?php endif;?>
         </div>
     </div>
 </div>
@@ -1349,9 +1713,9 @@ table.dt tr:last-child td{border-bottom:none}
     </tbody>
 </table>
 
-<!-- Comparable Sales -->
-<div class="label-xs" style="margin-bottom:12px">Comparable Sales — New Builds 2024+ · <?= htmlspecialchars($nb_display) ?></div>
+<!-- Comparable Sales — hidden on all paths when no comps exist -->
 <?php if(!empty($comps)): ?>
+<div class="label-xs" style="margin-bottom:12px">Comparable Sales — New Builds 2020+ · <?= htmlspecialchars($nb_display) ?></div>
 <table class="dt">
     <thead>
         <tr>
@@ -1381,14 +1745,14 @@ table.dt tr:last-child td{border-bottom:none}
 <?php if($comps_expanded): ?>
 <div style="font-size:10px;color:var(--on-surface-var);font-style:italic;margin-top:8px">Adjacent neighbourhood data included — fewer than 3 local comps available in <?= htmlspecialchars($nb_display) ?>.</div>
 <?php endif; ?>
-<?php else: ?>
-<div class="callout">No comparable sales data. Pro forma uses Metro Vancouver benchmarks (<?= money($current_psf) ?>/sqft). Upload REBGV monthly data via the admin panel.</div>
 <?php endif; ?>
 
-<div style="font-size:10px;color:var(--on-surface-var);margin-top:10px">Source: REBGV MLS · R1-1 zoned · Year Built 2024+ · Duplex and multiplex types. This is not an appraisal.</div>
+<div style="font-size:10px;color:var(--on-surface-var);margin-top:10px">Source: R1-1 zoned · Year Built 2020+ · Duplex and multiplex types. This is not an appraisal.</div>
 
 </div>
-</div><!-- /page 4 -->
+</div><!-- /page 4 strata/outlook -->
+
+<?php endif; // end path-aware market analysis ?>
 
 
 <!-- ═══════════════════════════════════════════════════════════════════════════
@@ -1408,18 +1772,24 @@ table.dt tr:last-child td{border-bottom:none}
 <!-- Left: costs -->
 <div>
     <div class="pf-section-title">Project Costs</div>
-    <div class="pf-line"><span class="pf-label">Land — BC Assessment <?= $assessment_year ?></span><span class="pf-val"><?= money($assessed_land) ?></span></div>
-    <div class="pf-line indent"><span class="pf-label">Hard build (<?= number_format($strata_buildable_sqft) ?> sqft × <?= money($build_psf) ?>/sqft)</span><span class="pf-val"><?= money($s_hard_build) ?></span></div>
+    <div class="pf-line"><span class="pf-label"><?= $land_label ?></span><span class="pf-val"><?= money($assessed_land) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">Hard build (<?= $build_label_fn($strata_buildable_sqft) ?>)</span><span class="pf-val"><?= money($s_hard_build) ?></span></div>
     <div class="pf-line indent"><span class="pf-label">City-wide DCL ($<?= number_format($dcl_city_rate,2) ?>/sqft)</span><span class="pf-val"><?= money($s_dcl_city) ?></span></div>
     <div class="pf-line indent"><span class="pf-label">Utilities DCL ($<?= number_format($dcl_util_rate,2) ?>/sqft)</span><span class="pf-val"><?= money($s_dcl_util) ?></span></div>
     <div class="pf-line indent"><span class="pf-label">Permit fees ($13.70/$1,000)</span><span class="pf-val"><?= money($s_permit_fees) ?></span></div>
     <div class="pf-line indent"><span class="pf-label">Metro DCC ($<?= number_format($metro_dcc_unit) ?>/unit × <?= max($max_units,1) ?> units)</span><span class="pf-val"><?= money($s_metro_dcc) ?></span></div>
     <?php if($peat_zone): ?><div class="pf-line indent"><span class="pf-label" style="color:#b45309">Peat zone contingency</span><span class="pf-val">$150,000</span></div><?php endif; ?>
+    <?php if($use_std_design): ?><div class="pf-line indent"><span class="pf-label" style="color:#166534">Standardized design credit (BC Provincial / CMHC)</span><span class="pf-val" style="color:#166534">−$35,000</span></div><?php endif; ?>
+    <?php if ($strata_all_cash): ?>
+    <div class="pf-line indent"><span class="pf-label">Construction financing — All Cash</span><span class="pf-val">$0</span></div>
+    <?php else: ?>
+    <div class="pf-line indent"><span class="pf-label">Construction financing (<?= number_format($s_cfin_ltc*100,0) ?>% LTC · <?= number_format($s_cfin_rate*100,1) ?>% · <?= $s_cfin_term ?> mo)</span><span class="pf-val"><?= money($s_construction_fin) ?></span></div>
+    <?php endif; ?>
     <div class="pf-total-bar"><span class="pf-total-label">Total Project Cost</span><span class="pf-total-val"><?= money($s_total_cost) ?></span></div>
 
     <div class="pf-section-title" style="margin-top:20px">Exit Value — Strata Sale</div>
     <div class="pf-line"><span class="pf-label">Saleable area (<?= number_format($strata_buildable_sqft) ?> × 85%)</span><span class="pf-val"><?= number_format(round($s_saleable)) ?> sqft</span></div>
-    <div class="pf-line"><span class="pf-label">Avg $/sqft (<?= htmlspecialchars($conf_short) ?> confidence)</span><span class="pf-val"><?= money($current_psf) ?>/sqft</span></div>
+    <div class="pf-line"><span class="pf-label"><?= htmlspecialchars($psf_label) ?> (<?= htmlspecialchars($conf_short) ?> confidence)</span><span class="pf-val"><?= money($current_psf) ?>/sqft</span></div>
     <div class="pf-total-bar"><span class="pf-total-label">Total Exit Value</span><span class="pf-total-val"><?= money($s_exit_value) ?></span></div>
 
     <div class="profit-block <?= $s_profit>=0?'positive':'negative' ?>" style="margin-top:16px">
@@ -1489,8 +1859,7 @@ table.dt tr:last-child td{border-bottom:none}
 </div>
 </div><!-- /grid -->
 <div style="font-size:10px;color:var(--on-surface-var);margin-top:16px;line-height:1.6">
-    Pro forma uses <?= htmlspecialchars($nb_display) ?> data as of <?= htmlspecialchars($data_as_of) ?>.
-    <?= $conf_short!=='High'?'Metro Vancouver benchmarks used where local data is unavailable. ':'' ?>Verify with a qualified financial advisor.
+    Pro forma uses <?= htmlspecialchars($nb_display) ?> data as of <?= htmlspecialchars($data_as_of) ?>.<?= $conf_short!=='High'?' Metro Vancouver benchmarks used where local data is unavailable.':'' ?>
 </div>
 </div>
 </div><!-- /page 5a strata -->
@@ -1553,11 +1922,11 @@ table.dt tr:last-child td{border-bottom:none}
 </div>
 </div><!-- /page 5b rental income -->
 
-<!-- ───────────────── PAGE 5B-2 — CMHC MLI FINANCING ───────────────── -->
+<!-- ───────────────── PAGE 5B-2 — RENTAL FINANCING (SCENARIO-AWARE) ───────────────── -->
 <div class="page">
 <div class="page-header">
     <div class="page-header-title"><?= htmlspecialchars($fa_name) ?> Financing.</div>
-    <div class="page-header-meta">Purpose-built rental financing · <?= number_format($fa_ltc*100) ?>% LTC · <?= number_format($fa_rate*100,2) ?>% interest · <?= $fa_amort ?>-yr amortization</div>
+    <div class="page-header-meta"><?php if($fa_is_all_cash): ?>Equity investment — no debt service<?php else: ?>Purpose-built rental financing · <?= number_format($fa_ltc*100) ?>% LTC · <?= number_format($fa_rate*100,2) ?>% interest · <?= $fa_amort ?>-yr amortization<?php endif; ?></div>
 </div>
 <div class="page-body">
 
@@ -1565,77 +1934,165 @@ table.dt tr:last-child td{border-bottom:none}
 <div class="label-xs" style="margin-bottom:12px">Total Project Cost — Rental Path (1.00 FSR)</div>
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:32px;margin-bottom:24px">
 <div>
-    <div class="pf-line"><span class="pf-label">Land — BC Assessment <?= $assessment_year ?></span><span class="pf-val"><?= money($assessed_land) ?></span></div>
-    <div class="pf-line indent"><span class="pf-label">Hard build (<?= number_format($rental_buildable_sqft) ?> sqft × <?= money($build_psf) ?>/sqft)</span><span class="pf-val"><?= money($r_hard_build) ?></span></div>
+    <div class="pf-line"><span class="pf-label"><?= $rental_land_override!==null ? 'Land — Adjusted Price <span style="font-size:9px;color:#b45309">(BC Assessment: '.money($assessed_land_original).')</span>' : 'Land — BC Assessment '.$assessment_year ?></span><span class="pf-val"><?= money($rental_assessed_land) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">Hard build (<?= number_format($rental_buildable_sqft) ?> sqft × $<?= number_format($rental_build_psf,0) ?>/sqft<?= $rental_build_psf_override!==null?' <span style="font-size:9px;color:#b45309">(default: $'.number_format($build_psf_original,0).'/sqft)</span>':'' ?>)</span><span class="pf-val"><?= money($r_hard_build) ?></span></div>
     <div class="pf-line indent"><span class="pf-label">Density bonus (bonus FSR × $40/sqft)</span><span class="pf-val"><?= money($r_density_bonus) ?></span></div>
     <div class="pf-line indent"><span class="pf-label">City-wide DCL ($<?= number_format($dcl_city_rate,2) ?>/sqft)</span><span class="pf-val"><?= money($r_dcl_city) ?></span></div>
     <div class="pf-line indent"><span class="pf-label">Utilities DCL ($<?= number_format($dcl_util_rate,2) ?>/sqft)</span><span class="pf-val"><?= money($r_dcl_util) ?></span></div>
     <div class="pf-line indent"><span class="pf-label">Permit fees ($13.70/$1,000)</span><span class="pf-val"><?= money($r_permit_fees) ?></span></div>
     <div class="pf-line indent"><span class="pf-label">Metro DCC ($<?= number_format($metro_dcc_unit) ?>/unit × <?= $rental_units ?> units)</span><span class="pf-val"><?= money($r_metro_dcc) ?></span></div>
     <?php if($peat_zone): ?><div class="pf-line indent"><span class="pf-label" style="color:#b45309">Peat zone contingency</span><span class="pf-val">$150,000</span></div><?php endif; ?>
+    <?php if($use_std_design): ?><div class="pf-line indent"><span class="pf-label" style="color:#166534">Standardized design credit (BC Provincial / CMHC)</span><span class="pf-val" style="color:#166534">−$35,000</span></div><?php endif; ?>
     <div class="pf-total-bar"><span class="pf-total-label">Total Project Cost</span><span class="pf-total-val"><?= money($r_total_cost) ?></span></div>
 </div>
 <div>
+<?php if($fa_is_all_cash): ?>
+    <div class="pf-section-title">All-Cash Investment</div>
+    <div class="pf-line"><span class="pf-label">Equity required (100%)</span><span class="pf-val" style="font-weight:700"><?= money($r_equity) ?></span></div>
+    <div style="margin-top:12px;font-size:11px;font-style:italic;color:var(--on-surface-var);line-height:1.6">Structured as equity investment — no debt service. All cash flow from NOI accrues directly to the investor.</div>
+<?php else: ?>
     <div class="pf-section-title"><?= htmlspecialchars($fa_name) ?> Loan Structure</div>
     <div class="pf-line"><span class="pf-label">Loan-to-cost (LTC)</span><span class="pf-val"><?= number_format($fa_ltc*100) ?>%</span></div>
     <div class="pf-line"><span class="pf-label">Base loan amount</span><span class="pf-val"><?= money($r_loan_base) ?></span></div>
+    <?php if($fa_scenario_key === 'cmhc_mli'): ?>
     <div class="pf-line indent"><span class="pf-label">CMHC insurance premium (<?= number_format($fa_ins_prem*100) ?>%)</span><span class="pf-val"><?= money($r_ins_amount) ?></span></div>
     <div class="pf-total-bar"><span class="pf-total-label">Total Insured Loan</span><span class="pf-total-val"><?= money($r_loan_total) ?></span></div>
+    <?php else: ?>
+    <div class="pf-total-bar"><span class="pf-total-label">Total Loan</span><span class="pf-total-val"><?= money($r_loan_total) ?></span></div>
+    <?php endif; ?>
     <div class="pf-line" style="margin-top:8px"><span class="pf-label">Equity required (<?= number_format((1-$fa_ltc)*100) ?>%)</span><span class="pf-val" style="font-weight:700"><?= money($r_equity) ?></span></div>
     <div class="pf-line"><span class="pf-label">Interest rate</span><span class="pf-val"><?= number_format($fa_rate*100,2) ?>% per annum</span></div>
     <div class="pf-line"><span class="pf-label">Amortization</span><span class="pf-val"><?= $fa_amort ?> years</span></div>
     <div class="pf-line"><span class="pf-label">Monthly mortgage payment</span><span class="pf-val" style="font-weight:700"><?= money($r_monthly_pmt) ?>/mo</span></div>
     <div class="pf-line"><span class="pf-label">Annual debt service</span><span class="pf-val" style="font-weight:700"><?= money($r_annual_debt) ?>/yr</span></div>
+<?php endif; ?>
 </div>
 </div>
 
 <!-- Cash flow & investor metrics -->
-<div class="label-xs" style="margin-bottom:12px">Investor Return Metrics</div>
+
+<!-- Headline: value creation story -->
+<div class="label-xs" style="margin-bottom:12px">The Investment Thesis</div>
+<div style="background:var(--primary);padding:20px 24px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:24px;margin-bottom:20px">
+    <div>
+        <div style="font-size:9px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.5);margin-bottom:8px">Yield on Cost</div>
+        <div style="font-family:'Noto Serif',serif;font-size:30px;color:<?= $r_cap_rate>=($fa_cap_rate*100)?'#4ade80':'#fbbf24' ?>"><?= pct($r_cap_rate) ?></div>
+        <div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:4px">
+            <?php if ($r_cap_rate >= ($fa_cap_rate*100)): ?>
+                Above <?= number_format($fa_cap_rate*100,1) ?>% market cap
+            <?php else: ?>
+                Below <?= number_format($fa_cap_rate*100,1) ?>% market cap
+            <?php endif; ?>
+        </div>
+    </div>
+    <div>
+        <div style="font-size:9px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.5);margin-bottom:8px">Stabilized Value</div>
+        <div style="font-family:'Noto Serif',serif;font-size:30px;color:var(--tertiary-fixed)"><?= money($r_asset_value) ?></div>
+        <div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:4px">NOI ÷ <?= number_format($fa_cap_rate*100,2) ?>% market cap</div>
+    </div>
+    <div>
+        <div style="font-size:9px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.5);margin-bottom:8px">Value Created Day 1</div>
+        <div style="font-family:'Noto Serif',serif;font-size:30px;color:<?= $r_value_vs_cost>=0?'#4ade80':'#f87171' ?>"><?= $r_value_vs_cost>=0?'+':'' ?><?= money($r_value_vs_cost) ?></div>
+        <div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:4px">Asset value minus total cost</div>
+    </div>
+</div>
+
+<!-- 10-year hold-through projection -->
+<div class="label-xs" style="margin-bottom:12px">Hold-Through Projection — Year 1 / Year 5 / Year 10</div>
+<table class="dt" style="margin-bottom:8px">
+    <thead>
+        <tr>
+            <th style="text-align:left">&nbsp;</th>
+            <th style="text-align:right">Year 1</th>
+            <th style="text-align:right">Year 5</th>
+            <th style="text-align:right">Year 10</th>
+        </tr>
+    </thead>
+    <tbody>
+        <?php
+        $y1 = $r_projections[1]; $y5 = $r_projections[5]; $y10 = $r_projections[10];
+        $cf_color = fn($v) => $v >= 0 ? '#166534' : '#ba1a1a';
+        ?>
+        <tr>
+            <td>Gross rental income</td>
+            <td style="text-align:right"><?= money($y1['gross_annual']) ?></td>
+            <td style="text-align:right"><?= money($y5['gross_annual']) ?></td>
+            <td style="text-align:right"><?= money($y10['gross_annual']) ?></td>
+        </tr>
+        <tr>
+            <td style="color:var(--on-surface-var)">Less vacancy + operating expenses</td>
+            <td style="text-align:right;color:#b45309">−<?= money($y1['gross_annual'] - $y1['noi']) ?></td>
+            <td style="text-align:right;color:#b45309">−<?= money($y5['gross_annual'] - $y5['noi']) ?></td>
+            <td style="text-align:right;color:#b45309">−<?= money($y10['gross_annual'] - $y10['noi']) ?></td>
+        </tr>
+        <tr style="border-top:1px solid rgba(0,0,0,0.08)">
+            <td style="font-weight:600">Net Operating Income</td>
+            <td style="text-align:right;font-weight:600"><?= money($y1['noi']) ?></td>
+            <td style="text-align:right;font-weight:600"><?= money($y5['noi']) ?></td>
+            <td style="text-align:right;font-weight:600"><?= money($y10['noi']) ?></td>
+        </tr>
+        <tr>
+            <td style="color:var(--on-surface-var)">Less debt service</td>
+            <?php if($fa_is_all_cash): ?>
+            <td colspan="3" style="text-align:center;font-style:italic;color:var(--on-surface-var)">No debt — all-cash investment</td>
+            <?php else: ?>
+            <td style="text-align:right;color:#b45309">−<?= money($y1['debt']) ?></td>
+            <td style="text-align:right;color:#b45309">−<?= money($y5['debt']) ?></td>
+            <td style="text-align:right;color:#b45309">−<?= money($y10['debt']) ?></td>
+            <?php endif; ?>
+        </tr>
+        <tr style="border-top:2px solid rgba(0,0,0,0.12);background:rgba(0,0,0,0.02)">
+            <td style="font-weight:700">Annual Cash Flow</td>
+            <td style="text-align:right;font-weight:700;color:<?= $cf_color($y1['cash_flow']) ?>"><?= $y1['cash_flow']<0?'−':'' ?><?= money(abs($y1['cash_flow'])) ?></td>
+            <td style="text-align:right;font-weight:700;color:<?= $cf_color($y5['cash_flow']) ?>"><?= $y5['cash_flow']<0?'−':'' ?><?= money(abs($y5['cash_flow'])) ?></td>
+            <td style="text-align:right;font-weight:700;color:<?= $cf_color($y10['cash_flow']) ?>"><?= $y10['cash_flow']<0?'−':'' ?><?= money(abs($y10['cash_flow'])) ?></td>
+        </tr>
+    </tbody>
+</table>
+<div style="font-size:10px;color:var(--on-surface-var);margin-bottom:20px;line-height:1.6">
+    Assumes <?= number_format($fa_rent_growth*100,1) ?>% annual rent growth, <?= number_format($fa_opex_growth*100,1) ?>% opex growth, <?= number_format($fa_vacancy*100,1) ?>% vacancy.
+    <?php if ($fa_stress_mode === 'stress_y5'): ?>Mortgage stress test: +<?= $fa_stress_bps ?>bps applied at Year 5 renewal.<?php else: ?>Debt service held fixed across the horizon (5-year term, locked rate).<?php endif; ?>
+    <?php if ($r_year_to_positive): ?>
+        Project turns cash-flow positive in <strong style="color:#166534">Year <?= $r_year_to_positive ?></strong>.
+    <?php else: ?>
+        Project does not reach positive cash flow within 30 years at these assumptions — relies on equity creation and long-term appreciation for return.
+    <?php endif; ?>
+</div>
+
+<!-- Year 1 risk metrics — reframed as risk context, not headline ROI -->
+<div class="label-xs" style="margin-bottom:12px">Year 1 Risk Metrics</div>
 <div style="display:grid;grid-template-columns:repeat(4,1fr);background:var(--surface-low);margin-bottom:20px">
     <div class="metric-cell">
-        <div class="label-xs">Annual Cash Flow</div>
-        <div class="metric-val" style="font-size:22px;color:<?= $r_cash_flow>=0?'var(--success)':'#ba1a1a' ?>"><?= $r_cash_flow<0?'−':'' ?><?= money(abs($r_cash_flow)) ?></div>
-        <div class="metric-sub">NOI − debt service</div>
+        <div class="label-xs">Year 1 Cash Flow</div>
+        <div class="metric-val" style="font-size:20px;color:<?= $r_cash_flow>=0?'var(--success)':'#ba1a1a' ?>"><?= $r_cash_flow<0?'−':'' ?><?= money(abs($r_cash_flow)) ?></div>
+        <div class="metric-sub">hold-through cost</div>
     </div>
     <div class="metric-cell">
         <div class="label-xs">Cash-on-Cash Return</div>
-        <div class="metric-val" style="font-size:22px"><?= pct($r_coc_return) ?></div>
+        <div class="metric-val" style="font-size:20px"><?= pct($r_coc_return) ?></div>
         <div class="metric-sub">on <?= money($r_equity) ?> equity</div>
     </div>
     <div class="metric-cell">
-        <div class="label-xs">Cap Rate</div>
-        <div class="metric-val" style="font-size:22px"><?= pct($r_cap_rate) ?></div>
-        <div class="metric-sub">NOI ÷ total cost</div>
+        <div class="label-xs">Break-even Occupancy</div>
+        <div class="metric-val" style="font-size:20px"><?= round($r_break_even_occ,0) ?>%</div>
+        <div class="metric-sub">below this = operating loss</div>
     </div>
     <div class="metric-cell">
-        <div class="label-xs">Payback Period</div>
-        <div class="metric-val" style="font-size:22px"><?= round($r_payback,1) ?> <span style="font-size:14px">yrs</span></div>
-        <div class="metric-sub">total cost ÷ NOI</div>
+        <div class="label-xs">Simple Payback</div>
+        <div class="metric-val" style="font-size:20px"><?= round($r_payback,1) ?> <span style="font-size:13px">yrs</span></div>
+        <div class="metric-sub">total cost ÷ NOI (unlevered)</div>
     </div>
 </div>
 
-<!-- Asset sale value -->
-<div style="background:var(--primary);padding:20px 24px;display:grid;grid-template-columns:1fr 1fr;gap:32px;margin-bottom:16px">
-    <div>
-        <div style="font-size:9px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:8px">Stabilised Asset Value</div>
-        <div style="font-family:'Noto Serif',serif;font-size:32px;color:var(--tertiary-fixed)"><?= money($r_asset_value) ?></div>
-        <div style="font-size:11px;color:rgba(255,255,255,.4);margin-top:4px">NOI ÷ <?= number_format($fa_cap_rate*100,2) ?>% market cap rate (<?= htmlspecialchars($nb_display) ?>)</div>
-    </div>
-    <div>
-        <div style="font-size:9px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:8px">Day-1 Equity Position</div>
-        <div style="font-family:'Noto Serif',serif;font-size:32px;color:<?= $r_value_vs_cost>=0?'#4ade80':'#f87171' ?>"><?= $r_value_vs_cost>=0?'+':'' ?><?= money($r_value_vs_cost) ?></div>
-        <div style="font-size:11px;color:rgba(255,255,255,.4);margin-top:4px">Asset value vs total project cost at stabilisation</div>
-    </div>
-</div>
-
-<!-- Rental covenant notice -->
+<!-- Rental covenant notice — only for scenarios that require it -->
+<?php if($fa_requires_covenant): ?>
 <div class="callout warn">
     <strong>Secured Rental Covenant — Section 219, Land Title Act:</strong> The 1.00 FSR density bonus is granted on condition that all units remain rental tenure for the covenant period (typically 60 years). Individual strata-title sale of units is prohibited while the covenant is in force. The building may be sold as a single income-producing asset to another investor. Confirm covenant terms with the City of Vancouver and a real estate lawyer before proceeding.
 </div>
+<?php endif; ?>
 
 <div style="font-size:10px;color:var(--on-surface-var);margin-top:12px;line-height:1.6">
-    Financing assumptions: <?= htmlspecialchars($fa_name) ?> · <?= number_format($fa_ltc*100) ?>% LTC · <?= number_format($fa_rate*100,2) ?>% interest · <?= $fa_amort ?>-year amortization · <?= number_format($fa_ins_prem*100) ?>% CMHC premium.
-    All figures are estimates. Verify with a licensed mortgage broker and financial advisor before making investment decisions.
+    Financing assumptions: <?= htmlspecialchars($fa_name) ?><?php if(!$fa_is_all_cash): ?> · <?= number_format($fa_ltc*100) ?>% LTC · <?= number_format($fa_rate*100,2) ?>% interest · <?= $fa_amort ?>-year amortization<?php if($fa_scenario_key === 'cmhc_mli'): ?> · <?= number_format($fa_ins_prem*100) ?>% CMHC premium<?php endif; ?><?php endif; ?>.
 </div>
 </div>
 </div><!-- /page 5b-2 financing -->
@@ -1652,17 +2109,23 @@ table.dt tr:last-child td{border-bottom:none}
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:40px">
 <div>
     <div class="pf-section-title">Project Costs — Strata Path</div>
-    <div class="pf-line"><span class="pf-label">Land — BC Assessment <?= $assessment_year ?></span><span class="pf-val"><?= money($assessed_land) ?></span></div>
-    <div class="pf-line indent"><span class="pf-label">Hard build (<?= number_format($strata_buildable_sqft) ?> sqft × <?= money($build_psf) ?>/sqft)</span><span class="pf-val"><?= money($s_hard_build) ?></span></div>
+    <div class="pf-line"><span class="pf-label"><?= $land_label ?></span><span class="pf-val"><?= money($assessed_land) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">Hard build (<?= $build_label_fn($strata_buildable_sqft) ?>)</span><span class="pf-val"><?= money($s_hard_build) ?></span></div>
     <div class="pf-line indent"><span class="pf-label">City-wide DCL</span><span class="pf-val"><?= money($s_dcl_city) ?></span></div>
     <div class="pf-line indent"><span class="pf-label">Utilities DCL</span><span class="pf-val"><?= money($s_dcl_util) ?></span></div>
     <div class="pf-line indent"><span class="pf-label">Metro DCC</span><span class="pf-val"><?= money($s_metro_dcc) ?></span></div>
     <div class="pf-line indent"><span class="pf-label">Permit fees</span><span class="pf-val"><?= money($s_permit_fees) ?></span></div>
     <?php if($peat_zone): ?><div class="pf-line indent"><span class="pf-label" style="color:#b45309">Peat zone contingency</span><span class="pf-val">$150,000</span></div><?php endif; ?>
+    <?php if($use_std_design): ?><div class="pf-line indent"><span class="pf-label" style="color:#166534">Standardized design credit (BC Provincial / CMHC)</span><span class="pf-val" style="color:#166534">−$35,000</span></div><?php endif; ?>
+    <?php if ($strata_all_cash): ?>
+    <div class="pf-line indent"><span class="pf-label">Construction financing — All Cash</span><span class="pf-val">$0</span></div>
+    <?php else: ?>
+    <div class="pf-line indent"><span class="pf-label">Construction financing (<?= number_format($s_cfin_ltc*100,0) ?>% LTC · <?= number_format($s_cfin_rate*100,1) ?>% · <?= $s_cfin_term ?> mo)</span><span class="pf-val"><?= money($s_construction_fin) ?></span></div>
+    <?php endif; ?>
     <div class="pf-total-bar"><span class="pf-total-label">Total Project Cost</span><span class="pf-total-val"><?= money($s_total_cost) ?></span></div>
     <div class="pf-section-title" style="margin-top:20px">Exit Value — Strata Sale</div>
     <div class="pf-line"><span class="pf-label">Saleable area (<?= number_format($strata_buildable_sqft) ?> sqft × 85%)</span><span class="pf-val"><?= number_format(round($s_saleable)) ?> sqft</span></div>
-    <div class="pf-line"><span class="pf-label">Avg $/sqft (<?= htmlspecialchars($conf_short) ?> confidence)</span><span class="pf-val"><?= money($current_psf) ?>/sqft</span></div>
+    <div class="pf-line"><span class="pf-label"><?= htmlspecialchars($psf_label) ?> (<?= htmlspecialchars($conf_short) ?> confidence)</span><span class="pf-val"><?= money($current_psf) ?>/sqft</span></div>
     <div class="pf-total-bar"><span class="pf-total-label">Total Exit Value</span><span class="pf-total-val"><?= money($s_exit_value) ?></span></div>
     <div class="profit-block <?= $s_profit>=0?'positive':'negative' ?>" style="margin-top:16px">
         <div><div class="profit-label">Estimated Profit</div><div class="profit-sub">Before tax &amp; professional fees</div></div>
@@ -1719,212 +2182,7 @@ table.dt tr:last-child td{border-bottom:none}
 </div>
 </div><!-- /page 5a outlook strata -->
 
-<!-- ───────────────── PAGE 5B (OUTLOOK) — RENTAL INCOME ANALYSIS ───────────────── -->
-<div class="page">
-<div class="page-header">
-    <div class="page-header-title">Rental Income Analysis.</div>
-    <div class="page-header-meta">Secured Rental · 1.00 FSR · <?= $rental_units ?> units · <?= htmlspecialchars($nb_display) ?></div>
-</div>
-<div class="page-body tight">
-<div class="label-xs" style="margin-bottom:12px">Rental Income by Bedroom Type</div>
-<table class="dt" style="margin-bottom:20px">
-    <thead><tr><th>Type</th><th>Units</th><th>Market Rent</th><th>Monthly Total</th><th>CMHC Benchmark</th><th>Variance</th></tr></thead>
-    <tbody>
-    <?php foreach($rental_rows as $rr):
-        $var=$rr['cmhc']>0?(($rr['curr']-$rr['cmhc'])/$rr['cmhc'])*100:0;
-        $row_total=$rr['curr']*$rr['units'];
-    ?>
-    <tr>
-        <td style="font-weight:600"><?= $rr['t'] ?></td>
-        <td style="color:var(--on-surface-var)"><?= $rr['units'] ?></td>
-        <td><?= money($rr['curr']) ?>/mo</td>
-        <td style="font-weight:500"><?= money($row_total) ?>/mo</td>
-        <td><?= money($rr['cmhc']) ?>/mo</td>
-        <td class="<?= $var>2?'dt-pass':($var<-2?'dt-warn':'dt-neutral') ?>"><?= $var>=0?'+':'' ?><?= pct($var) ?></td>
-    </tr>
-    <?php endforeach; ?>
-    </tbody>
-</table>
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:32px;margin-bottom:20px">
-<div>
-    <div class="pf-section-title">Income Waterfall</div>
-    <div class="pf-line"><span class="pf-label">Gross monthly income</span><span class="pf-val"><?= money($r_gross_monthly) ?></span></div>
-    <div class="pf-line"><span class="pf-label">Annual gross income</span><span class="pf-val"><?= money($r_gross_annual) ?></span></div>
-    <div class="pf-line indent"><span class="pf-label">Less vacancy (<?= round($fa_vacancy*100,1) ?>%)</span><span class="pf-val" style="color:#b45309">−<?= money($r_gross_annual*$fa_vacancy) ?></span></div>
-    <div class="pf-total-bar"><span class="pf-total-label">Effective Gross Income (EGI)</span><span class="pf-total-val"><?= money($r_egi) ?>/yr</span></div>
-</div>
-<div>
-    <div class="pf-section-title">Operating Expenses</div>
-    <div class="pf-line"><span class="pf-label">Property management (<?= round($fa_mgmt*100) ?>%)</span><span class="pf-val"><?= money($r_mgmt_fee) ?></span></div>
-    <div class="pf-line"><span class="pf-label">Property tax</span><span class="pf-val"><?= money($r_prop_tax) ?></span></div>
-    <div class="pf-line"><span class="pf-label">Building insurance</span><span class="pf-val"><?= money($r_insurance) ?></span></div>
-    <div class="pf-line"><span class="pf-label">Maintenance &amp; repairs</span><span class="pf-val"><?= money($r_maint) ?></span></div>
-    <div class="pf-total-bar"><span class="pf-total-label">Total Operating Expenses</span><span class="pf-total-val"><?= money($r_total_opex) ?>/yr</span></div>
-</div>
-</div>
-<div class="margin-callout" style="background:var(--primary)">
-    <div style="font-size:12px;color:rgba(255,255,255,.6)">Net Operating Income (NOI) = EGI − Operating Expenses</div>
-    <div style="font-family:'Noto Serif',serif;font-size:28px;color:var(--tertiary-fixed)"><?= money($r_noi) ?>/yr</div>
-</div>
-</div>
-</div><!-- /page 5b outlook rental income -->
-
-<!-- ───────────────── PAGE 5B-2 (OUTLOOK) — CMHC MLI SELECT FINANCING ───────────────── -->
-<div class="page">
-<div class="page-header">
-    <div class="page-header-title"><?= htmlspecialchars($fa_name) ?> Financing.</div>
-    <div class="page-header-meta"><?= number_format($fa_ltc*100) ?>% LTC · <?= number_format($fa_rate*100,2) ?>% interest · <?= $fa_amort ?>-yr amortization</div>
-</div>
-<div class="page-body">
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:32px;margin-bottom:24px">
-<div>
-    <div class="pf-section-title">Project Costs — Rental Path (1.00 FSR)</div>
-    <div class="pf-line"><span class="pf-label">Land — BC Assessment <?= $assessment_year ?></span><span class="pf-val"><?= money($assessed_land) ?></span></div>
-    <div class="pf-line indent"><span class="pf-label">Hard build (<?= number_format($rental_buildable_sqft) ?> sqft × <?= money($build_psf) ?>/sqft)</span><span class="pf-val"><?= money($r_hard_build) ?></span></div>
-    <div class="pf-line indent"><span class="pf-label">Density bonus</span><span class="pf-val"><?= money($r_density_bonus) ?></span></div>
-    <div class="pf-line indent"><span class="pf-label">DCLs &amp; permit fees</span><span class="pf-val"><?= money($r_dcl_city+$r_dcl_util+$r_metro_dcc+$r_permit_fees) ?></span></div>
-    <?php if($peat_zone): ?><div class="pf-line indent"><span class="pf-label" style="color:#b45309">Peat contingency</span><span class="pf-val">$150,000</span></div><?php endif; ?>
-    <div class="pf-total-bar"><span class="pf-total-label">Total Project Cost</span><span class="pf-total-val"><?= money($r_total_cost) ?></span></div>
-</div>
-<div>
-    <div class="pf-section-title"><?= htmlspecialchars($fa_name) ?> Loan Structure</div>
-    <div class="pf-line"><span class="pf-label">Base loan (<?= number_format($fa_ltc*100) ?>% LTC)</span><span class="pf-val"><?= money($r_loan_base) ?></span></div>
-    <div class="pf-line indent"><span class="pf-label">CMHC premium (<?= number_format($fa_ins_prem*100) ?>%)</span><span class="pf-val"><?= money($r_ins_amount) ?></span></div>
-    <div class="pf-total-bar"><span class="pf-total-label">Total Insured Loan</span><span class="pf-total-val"><?= money($r_loan_total) ?></span></div>
-    <div class="pf-line" style="margin-top:8px"><span class="pf-label">Equity required (<?= number_format((1-$fa_ltc)*100) ?>%)</span><span class="pf-val" style="font-weight:700"><?= money($r_equity) ?></span></div>
-    <div class="pf-line"><span class="pf-label">Monthly mortgage payment</span><span class="pf-val" style="font-weight:700"><?= money($r_monthly_pmt) ?>/mo</span></div>
-    <div class="pf-line"><span class="pf-label">Annual debt service</span><span class="pf-val" style="font-weight:700"><?= money($r_annual_debt) ?>/yr</span></div>
-</div>
-</div>
-<div class="label-xs" style="margin-bottom:12px">Investor Return Metrics</div>
-<div style="display:grid;grid-template-columns:repeat(4,1fr);background:var(--surface-low);margin-bottom:20px">
-    <div class="metric-cell"><div class="label-xs">Annual Cash Flow</div><div class="metric-val" style="font-size:22px;color:<?= $r_cash_flow>=0?'var(--success)':'#ba1a1a' ?>"><?= $r_cash_flow<0?'−':'' ?><?= money(abs($r_cash_flow)) ?></div><div class="metric-sub">NOI − debt service</div></div>
-    <div class="metric-cell"><div class="label-xs">Cash-on-Cash Return</div><div class="metric-val" style="font-size:22px"><?= pct($r_coc_return) ?></div><div class="metric-sub">on <?= money($r_equity) ?> equity</div></div>
-    <div class="metric-cell"><div class="label-xs">Cap Rate</div><div class="metric-val" style="font-size:22px"><?= pct($r_cap_rate) ?></div><div class="metric-sub">NOI ÷ total cost</div></div>
-    <div class="metric-cell"><div class="label-xs">Payback Period</div><div class="metric-val" style="font-size:22px"><?= round($r_payback,1) ?> <span style="font-size:14px">yrs</span></div><div class="metric-sub">total cost ÷ NOI</div></div>
-</div>
-<div style="background:var(--primary);padding:20px 24px;display:grid;grid-template-columns:1fr 1fr;gap:32px;margin-bottom:16px">
-    <div>
-        <div style="font-size:9px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:8px">Stabilised Asset Value</div>
-        <div style="font-family:'Noto Serif',serif;font-size:32px;color:var(--tertiary-fixed)"><?= money($r_asset_value) ?></div>
-        <div style="font-size:11px;color:rgba(255,255,255,.4);margin-top:4px">NOI ÷ <?= number_format($fa_cap_rate*100,2) ?>% market cap rate</div>
-    </div>
-    <div>
-        <div style="font-size:9px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:8px">Day-1 Equity Position</div>
-        <div style="font-family:'Noto Serif',serif;font-size:32px;color:<?= $r_value_vs_cost>=0?'#4ade80':'#f87171' ?>"><?= $r_value_vs_cost>=0?'+':'' ?><?= money($r_value_vs_cost) ?></div>
-        <div style="font-size:11px;color:rgba(255,255,255,.4);margin-top:4px">Asset value vs total project cost</div>
-    </div>
-</div>
-<div class="callout warn" style="font-size:11px">
-    <strong>Section 219 Rental Covenant:</strong> The 1.00 FSR density bonus is conditional on rental tenure (typically 60 years). Individual unit sales prohibited while covenant is in force. Building may be sold as a single income-producing asset.
-</div>
-</div>
-</div><!-- /page 5b-2 outlook financing -->
-
-<!-- ───────────────── PAGE 5C — PATH COMPARISON ───────────────── -->
-<div class="page">
-<div class="page-header">
-    <div class="page-header-title">Path Comparison.</div>
-    <div class="page-header-meta">Strata / Sell vs Secured Rental / Hold · <?= $max_units ?> units · <?= htmlspecialchars($nb_display) ?></div>
-</div>
-<div class="page-body tight">
-
-<!-- Side by side summary table -->
-<div class="label-xs" style="margin-bottom:16px">Development Path Analysis</div>
-<table class="dt" style="margin-bottom:24px">
-    <thead>
-        <tr>
-            <th style="width:35%">Metric</th>
-            <th style="text-align:center;background:#f0fdf4;color:#166534">Strata / Sell</th>
-            <th style="text-align:center;background:#eff6ff;color:#1d4ed8">Rental / Hold</th>
-        </tr>
-    </thead>
-    <tbody>
-        <tr><td>FSR</td><td style="text-align:center;font-weight:600">0.70</td><td style="text-align:center;font-weight:600">1.00</td></tr>
-        <tr><td>Buildable Area</td><td style="text-align:center"><?= number_format($strata_buildable_sqft) ?> sqft</td><td style="text-align:center"><?= number_format($rental_buildable_sqft) ?> sqft</td></tr>
-        <tr><td>Total Project Cost</td><td style="text-align:center;font-weight:600"><?= money($s_total_cost) ?></td><td style="text-align:center;font-weight:600"><?= money($r_total_cost) ?></td></tr>
-        <tr><td>Equity Required</td><td style="text-align:center">N/A (sell on completion)</td><td style="text-align:center;font-weight:600"><?= money($r_equity) ?> (<?= number_format((1-$fa_ltc)*100) ?>%)</td></tr>
-        <tr><td>Exit / Annual Income</td><td style="text-align:center;font-weight:600;color:#166534"><?= money($s_exit_value) ?> sale</td><td style="text-align:center;font-weight:600;color:#1d4ed8"><?= money($r_noi) ?>/yr NOI</td></tr>
-        <tr><td>Profit / Cash Flow</td><td style="text-align:center;font-weight:700;color:<?= $s_profit>=0?'#166534':'#ba1a1a' ?>"><?= money($s_profit) ?></td><td style="text-align:center;font-weight:700;color:<?= $r_cash_flow>=0?'#166634':'#ba1a1a' ?>"><?= money($r_cash_flow) ?>/yr</td></tr>
-        <tr><td>ROI / Cap Rate</td><td style="text-align:center"><?= pct($s_roi) ?> ROI</td><td style="text-align:center"><?= pct($r_cap_rate) ?> cap rate</td></tr>
-        <tr><td>Cash-on-Cash Return</td><td style="text-align:center;color:var(--on-surface-var)">—</td><td style="text-align:center;font-weight:600"><?= pct($r_coc_return) ?></td></tr>
-        <tr><td>Payback Period</td><td style="text-align:center;color:var(--on-surface-var)">N/A (one-time sale)</td><td style="text-align:center"><?= round($r_payback,1) ?> years</td></tr>
-        <tr><td>Stabilised Asset Value</td><td style="text-align:center;color:var(--on-surface-var)">—</td><td style="text-align:center;font-weight:600"><?= money($r_asset_value) ?></td></tr>
-        <tr><td>Can Sell Individual Units</td><td style="text-align:center;color:#166534;font-weight:600">✓ Yes</td><td style="text-align:center;color:#b45309;font-weight:600">✗ Covenant restricted</td></tr>
-    </tbody>
-</table>
-
-<!-- Visual bar comparison -->
-<?php
-$max_bar = max($s_exit_value, $r_asset_value, 1);
-$bars = [
-    ['label'=>'Strata Exit Value','val'=>$s_exit_value,'color'=>'#000a1e'],
-    ['label'=>'Rental Asset Value','val'=>$r_asset_value,'color'=>'#1d4ed8'],
-    ['label'=>'Strata Profit','val'=>max($s_profit,0),'color'=>'#166534'],
-    ['label'=>'Annual NOI (×10)','val'=>$r_noi*10,'color'=>'#0369a1'],
-];
-?>
-<div class="label-xs" style="margin-bottom:12px">Visual Comparison</div>
-<div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px">
-<?php foreach($bars as $bar): $w=round(($bar['val']/$max_bar)*100); ?>
-<div style="display:flex;align-items:center;gap:12px;font-size:11px">
-    <div style="width:160px;flex-shrink:0;color:var(--on-surface-var)"><?= $bar['label'] ?></div>
-    <div style="flex:1;background:var(--surface-low);height:24px;position:relative">
-        <div style="width:<?= min($w,100) ?>%;height:100%;background:<?= $bar['color'] ?>;opacity:.85"></div>
-    </div>
-    <div style="width:90px;text-align:right;font-weight:600;color:var(--on-surface)"><?= money($bar['val']) ?></div>
-</div>
-<?php endforeach; ?>
-<div style="font-size:10px;color:var(--on-surface-var);font-style:italic">* Annual NOI shown at 10× for scale comparison with capital values.</div>
-</div>
-
-<!-- Unit mix donut — strata -->
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:32px;align-items:start">
-<div>
-    <div class="label-xs" style="margin-bottom:10px">Strata Unit Mix</div>
-    <?php
-    $br_counts2=[1=>0,2=>0,3=>0];
-    foreach($unit_mix as $u) $br_counts2[$u['br']]++;
-    $total_u2=count($unit_mix);
-    $segs2=[];$offset2=0;
-    $dv2=[$br_counts2[2],$br_counts2[1],$br_counts2[3]];
-    $dc2=['#000a1e','#c9a84c','#8da3c0'];
-    $dl2=['2 Bedroom','1 Bedroom','3 Bedroom'];
-    foreach($dv2 as $i=>$v){$p=$total_u2>0?$v/$total_u2:0;$d=$p*$circumference;$g=$circumference-$d;$segs2[]=[$d,$g,$offset2,$dc2[$i],$dl2[$i],$v,$p];$offset2+=$d;}
-    ?>
-    <svg viewBox="0 0 200 200" style="width:130px;height:130px;display:block;margin:0 auto 8px">
-        <?php foreach($segs2 as $s): if($s[5]===0)continue; ?>
-        <circle cx="100" cy="100" r="70" fill="none" stroke="<?=$s[3]?>" stroke-width="28"
-            stroke-dasharray="<?=$s[0]?> <?=$s[1]?>" stroke-dashoffset="-<?=$s[2]?>"
-            transform="rotate(-90 100 100)"/>
-        <?php endforeach; ?>
-        <text x="100" y="96" text-anchor="middle" font-family="Noto Serif,serif" font-size="26" font-weight="700" fill="#000a1e"><?=$total_u2?></text>
-        <text x="100" y="112" text-anchor="middle" font-family="Work Sans,sans-serif" font-size="7" letter-spacing="1" fill="#2d3a52">UNITS</text>
-    </svg>
-    <div style="display:flex;flex-direction:column;gap:4px;font-size:10px">
-        <?php foreach($segs2 as $s): if($s[5]===0)continue; ?>
-        <div style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;background:<?=$s[3]?>;display:inline-block;flex-shrink:0"></span><?=$s[4]?> (<?=round($s[6]*100)?>%)</div>
-        <?php endforeach; ?>
-    </div>
-</div>
-<div>
-    <div class="label-xs" style="margin-bottom:10px">Key Consideration</div>
-    <div style="font-size:11px;color:var(--on-surface-var);line-height:1.8">
-        <strong style="color:var(--on-surface)">Choose Strata if:</strong> you need capital returned on completion, have no long-term equity goals, or market conditions favour pre-sales.<br><br>
-        <strong style="color:var(--on-surface)">Choose Rental if:</strong> you want long-term income, have access to <?= money($r_equity) ?> equity, and qualify for CMHC MLI Select financing. The <?= number_format($fa_amort) ?>-year amortization materially reduces monthly payments vs conventional.<br><br>
-        <strong style="color:var(--on-surface)">Note:</strong> The rental path carries a Section 219 covenant — individual unit sales are prohibited during the covenant period.
-    </div>
-</div>
-</div>
-
-</div>
-</div><!-- /page 5c comparison -->
-
-<?php endif; // end path branching for page 5 ?>
-
-<!-- ═══════════════════════════════════════════════════════════════════════════
-     PAGE 6 — WYNSTON OUTLOOK
-═══════════════════════════════════════════════════════════════════════════ -->
+<!-- ───────────────── WYNSTON OUTLOOK — INLINE (OUTLOOK PATH) ───────────────── -->
 <div class="page">
 <div class="page-header">
     <div class="page-header-title">Wynston Outlook.</div>
@@ -1942,9 +2200,9 @@ $bars = [
         <div class="psf-note">/ sqft · current</div>
     </div>
     <div class="psf-cell">
-        <div class="psf-label">Finished Sale Price</div>
+        <div class="psf-label"><?= htmlspecialchars($psf_label) ?></div>
         <div class="psf-val"><?= money($current_psf) ?></div>
-        <div class="psf-note">/ sqft · <?= htmlspecialchars($data_as_of) ?></div>
+        <div class="psf-note">/ sqft · <?= htmlspecialchars($data_as_of) ?><?= $psf_override!==null?' <span style="color:#b45309">(adjusted)</span>':'' ?></div>
     </div>
     <div class="psf-cell" style="padding-right:64px">
         <div class="psf-label">Wynston Outlook</div>
@@ -2030,12 +2288,635 @@ $bars = [
 <div class="callout">Wynston Outlook not yet available for <?= htmlspecialchars($nb_display) ?>. Enter quarterly bank/broker forecasts via the admin panel (Wynston Outlook tab) to enable this section.</div>
 <?php endif; ?>
 
-<div style="font-size:10px;color:var(--on-surface-var);margin-top:20px;line-height:1.7;border-top:1px solid rgba(0,0,0,.06);padding-top:16px">
-    <strong>Disclaimer:</strong> Wynston Outlook is compiled from publicly available institutional forecasts and proprietary neighbourhood market data. It is provided for informational purposes only and does not constitute financial, investment, or real estate advice. Past performance does not guarantee future results. Always consult a licensed professional before making investment decisions.
+</div>
+</div><!-- /wynston outlook inline for outlook path -->
+
+<!-- ───────────────── PAGE 5B (OUTLOOK) — RENTAL INCOME ANALYSIS ───────────────── -->
+<div class="page">
+<div class="page-header">
+    <div class="page-header-title">Rental Income Analysis.</div>
+    <div class="page-header-meta">Secured Rental · 1.00 FSR · <?= $rental_units ?> units · <?= htmlspecialchars($nb_display) ?></div>
+</div>
+<div class="page-body tight">
+<div class="label-xs" style="margin-bottom:12px">Rental Income by Bedroom Type</div>
+<table class="dt" style="margin-bottom:20px">
+    <thead><tr><th>Type</th><th>Units</th><th>Market Rent</th><th>Monthly Total</th><th>CMHC Benchmark</th><th>Variance</th></tr></thead>
+    <tbody>
+    <?php foreach($rental_rows as $rr):
+        $var=$rr['cmhc']>0?(($rr['curr']-$rr['cmhc'])/$rr['cmhc'])*100:0;
+        $row_total=$rr['curr']*$rr['units'];
+    ?>
+    <tr>
+        <td style="font-weight:600"><?= $rr['t'] ?></td>
+        <td style="color:var(--on-surface-var)"><?= $rr['units'] ?></td>
+        <td><?= money($rr['curr']) ?>/mo</td>
+        <td style="font-weight:500"><?= money($row_total) ?>/mo</td>
+        <td><?= money($rr['cmhc']) ?>/mo</td>
+        <td class="<?= $var>2?'dt-pass':($var<-2?'dt-warn':'dt-neutral') ?>"><?= $var>=0?'+':'' ?><?= pct($var) ?></td>
+    </tr>
+    <?php endforeach; ?>
+    </tbody>
+</table>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:32px;margin-bottom:20px">
+<div>
+    <div class="pf-section-title">Income Waterfall</div>
+    <div class="pf-line"><span class="pf-label">Gross monthly income</span><span class="pf-val"><?= money($r_gross_monthly) ?></span></div>
+    <div class="pf-line"><span class="pf-label">Annual gross income</span><span class="pf-val"><?= money($r_gross_annual) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">Less vacancy (<?= round($fa_vacancy*100,1) ?>%)</span><span class="pf-val" style="color:#b45309">−<?= money($r_gross_annual*$fa_vacancy) ?></span></div>
+    <div class="pf-total-bar"><span class="pf-total-label">Effective Gross Income (EGI)</span><span class="pf-total-val"><?= money($r_egi) ?>/yr</span></div>
+</div>
+<div>
+    <div class="pf-section-title">Operating Expenses</div>
+    <div class="pf-line"><span class="pf-label">Property management (<?= round($fa_mgmt*100) ?>%)</span><span class="pf-val"><?= money($r_mgmt_fee) ?></span></div>
+    <div class="pf-line"><span class="pf-label">Property tax</span><span class="pf-val"><?= money($r_prop_tax) ?></span></div>
+    <div class="pf-line"><span class="pf-label">Building insurance</span><span class="pf-val"><?= money($r_insurance) ?></span></div>
+    <div class="pf-line"><span class="pf-label">Maintenance &amp; repairs</span><span class="pf-val"><?= money($r_maint) ?></span></div>
+    <div class="pf-total-bar"><span class="pf-total-label">Total Operating Expenses</span><span class="pf-total-val"><?= money($r_total_opex) ?>/yr</span></div>
+</div>
+</div>
+<div class="margin-callout" style="background:var(--primary)">
+    <div style="font-size:12px;color:rgba(255,255,255,.6)">Net Operating Income (NOI) = EGI − Operating Expenses</div>
+    <div style="font-family:'Noto Serif',serif;font-size:28px;color:var(--tertiary-fixed)"><?= money($r_noi) ?>/yr</div>
+</div>
+</div>
+</div><!-- /page 5b outlook rental income -->
+
+<!-- ───────────────── PAGE 5B-2 (OUTLOOK) — RENTAL FINANCING (SCENARIO-AWARE) ───────────────── -->
+<div class="page">
+<div class="page-header">
+    <div class="page-header-title"><?= htmlspecialchars($fa_name) ?> Financing.</div>
+    <div class="page-header-meta"><?php if($fa_is_all_cash): ?>Equity investment — no debt service<?php else: ?><?= number_format($fa_ltc*100) ?>% LTC · <?= number_format($fa_rate*100,2) ?>% interest · <?= $fa_amort ?>-yr amortization<?php endif; ?></div>
+</div>
+<div class="page-body">
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:32px;margin-bottom:24px">
+<div>
+    <div class="pf-section-title">Project Costs — Rental Path (1.00 FSR)</div>
+    <div class="pf-line"><span class="pf-label"><?= $rental_land_override!==null ? 'Land — Adjusted Price' : 'Land — BC Assessment '.$assessment_year ?></span><span class="pf-val"><?= money($rental_assessed_land) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">Hard build (<?= number_format($rental_buildable_sqft) ?> sqft × $<?= number_format($rental_build_psf,0) ?>/sqft)</span><span class="pf-val"><?= money($r_hard_build) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">Density bonus</span><span class="pf-val"><?= money($r_density_bonus) ?></span></div>
+    <div class="pf-line indent"><span class="pf-label">DCLs &amp; permit fees</span><span class="pf-val"><?= money($r_dcl_city+$r_dcl_util+$r_metro_dcc+$r_permit_fees) ?></span></div>
+    <?php if($peat_zone): ?><div class="pf-line indent"><span class="pf-label" style="color:#b45309">Peat contingency</span><span class="pf-val">$150,000</span></div><?php endif; ?>
+    <?php if($use_std_design): ?><div class="pf-line indent"><span class="pf-label" style="color:#166534">Standardized design credit (BC Provincial / CMHC)</span><span class="pf-val" style="color:#166534">−$35,000</span></div><?php endif; ?>
+    <div class="pf-total-bar"><span class="pf-total-label">Total Project Cost</span><span class="pf-total-val"><?= money($r_total_cost) ?></span></div>
+</div>
+<div>
+<?php if($fa_is_all_cash): ?>
+    <div class="pf-section-title">All-Cash Investment</div>
+    <div class="pf-line"><span class="pf-label">Equity required (100%)</span><span class="pf-val" style="font-weight:700"><?= money($r_equity) ?></span></div>
+    <div style="margin-top:12px;font-size:11px;font-style:italic;color:var(--on-surface-var);line-height:1.6">Structured as equity investment — no debt service.</div>
+<?php else: ?>
+    <div class="pf-section-title"><?= htmlspecialchars($fa_name) ?> Loan Structure</div>
+    <div class="pf-line"><span class="pf-label">Base loan (<?= number_format($fa_ltc*100) ?>% LTC)</span><span class="pf-val"><?= money($r_loan_base) ?></span></div>
+    <?php if($fa_scenario_key === 'cmhc_mli'): ?>
+    <div class="pf-line indent"><span class="pf-label">CMHC premium (<?= number_format($fa_ins_prem*100) ?>%)</span><span class="pf-val"><?= money($r_ins_amount) ?></span></div>
+    <div class="pf-total-bar"><span class="pf-total-label">Total Insured Loan</span><span class="pf-total-val"><?= money($r_loan_total) ?></span></div>
+    <?php else: ?>
+    <div class="pf-total-bar"><span class="pf-total-label">Total Loan</span><span class="pf-total-val"><?= money($r_loan_total) ?></span></div>
+    <?php endif; ?>
+    <div class="pf-line" style="margin-top:8px"><span class="pf-label">Equity required (<?= number_format((1-$fa_ltc)*100) ?>%)</span><span class="pf-val" style="font-weight:700"><?= money($r_equity) ?></span></div>
+    <div class="pf-line"><span class="pf-label">Monthly mortgage payment</span><span class="pf-val" style="font-weight:700"><?= money($r_monthly_pmt) ?>/mo</span></div>
+    <div class="pf-line"><span class="pf-label">Annual debt service</span><span class="pf-val" style="font-weight:700"><?= money($r_annual_debt) ?>/yr</span></div>
+<?php endif; ?>
+</div>
+</div>
+
+<!-- Headline value creation -->
+<div class="label-xs" style="margin-bottom:12px">Investment Thesis</div>
+<div style="background:var(--primary);padding:18px 22px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;margin-bottom:16px">
+    <div>
+        <div style="font-size:9px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.5);margin-bottom:6px">Yield on Cost</div>
+        <div style="font-family:'Noto Serif',serif;font-size:26px;color:<?= $r_cap_rate>=($fa_cap_rate*100)?'#4ade80':'#fbbf24' ?>"><?= pct($r_cap_rate) ?></div>
+        <div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:3px">vs <?= number_format($fa_cap_rate*100,1) ?>% market cap</div>
+    </div>
+    <div>
+        <div style="font-size:9px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.5);margin-bottom:6px">Stabilized Value</div>
+        <div style="font-family:'Noto Serif',serif;font-size:26px;color:var(--tertiary-fixed)"><?= money($r_asset_value) ?></div>
+        <div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:3px">NOI ÷ market cap rate</div>
+    </div>
+    <div>
+        <div style="font-size:9px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.5);margin-bottom:6px">Value Created Day 1</div>
+        <div style="font-family:'Noto Serif',serif;font-size:26px;color:<?= $r_value_vs_cost>=0?'#4ade80':'#f87171' ?>"><?= $r_value_vs_cost>=0?'+':'' ?><?= money($r_value_vs_cost) ?></div>
+        <div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:3px">asset value minus total cost</div>
+    </div>
+</div>
+
+<!-- Compact Y1/Y5/Y10 projection -->
+<div class="label-xs" style="margin-bottom:12px">Hold-Through Projection</div>
+<table class="dt" style="margin-bottom:4px;font-size:12px">
+    <thead>
+        <tr>
+            <th style="text-align:left">&nbsp;</th>
+            <th style="text-align:right">Year 1</th>
+            <th style="text-align:right">Year 5</th>
+            <th style="text-align:right">Year 10</th>
+        </tr>
+    </thead>
+    <tbody>
+        <?php
+        $oy1 = $r_projections[1]; $oy5 = $r_projections[5]; $oy10 = $r_projections[10];
+        $ocf = fn($v) => $v >= 0 ? '#166534' : '#ba1a1a';
+        ?>
+        <tr>
+            <td>NOI</td>
+            <td style="text-align:right"><?= money($oy1['noi']) ?></td>
+            <td style="text-align:right"><?= money($oy5['noi']) ?></td>
+            <td style="text-align:right"><?= money($oy10['noi']) ?></td>
+        </tr>
+        <tr>
+            <td style="color:var(--on-surface-var)">Debt service</td>
+            <?php if($fa_is_all_cash): ?>
+            <td colspan="3" style="text-align:center;font-style:italic;color:var(--on-surface-var)">No debt — all-cash</td>
+            <?php else: ?>
+            <td style="text-align:right;color:#b45309">−<?= money($oy1['debt']) ?></td>
+            <td style="text-align:right;color:#b45309">−<?= money($oy5['debt']) ?></td>
+            <td style="text-align:right;color:#b45309">−<?= money($oy10['debt']) ?></td>
+            <?php endif; ?>
+        </tr>
+        <tr style="border-top:2px solid rgba(0,0,0,0.12);background:rgba(0,0,0,0.02)">
+            <td style="font-weight:700">Cash Flow</td>
+            <td style="text-align:right;font-weight:700;color:<?= $ocf($oy1['cash_flow']) ?>"><?= $oy1['cash_flow']<0?'−':'' ?><?= money(abs($oy1['cash_flow'])) ?></td>
+            <td style="text-align:right;font-weight:700;color:<?= $ocf($oy5['cash_flow']) ?>"><?= $oy5['cash_flow']<0?'−':'' ?><?= money(abs($oy5['cash_flow'])) ?></td>
+            <td style="text-align:right;font-weight:700;color:<?= $ocf($oy10['cash_flow']) ?>"><?= $oy10['cash_flow']<0?'−':'' ?><?= money(abs($oy10['cash_flow'])) ?></td>
+        </tr>
+    </tbody>
+</table>
+<div style="font-size:10px;color:var(--on-surface-var);margin-bottom:14px;line-height:1.5">
+    <?= number_format($fa_rent_growth*100,1) ?>% rent growth · <?= number_format($fa_opex_growth*100,1) ?>% opex growth · <?= number_format($fa_vacancy*100,1) ?>% vacancy.
+    <?php if ($r_year_to_positive): ?>Cash-flow positive in <strong style="color:#166534">Year <?= $r_year_to_positive ?></strong>.<?php else: ?>Does not reach positive cash flow within 30 years at these assumptions.<?php endif; ?>
+</div>
+
+<!-- Year 1 risk strip -->
+<div style="display:grid;grid-template-columns:repeat(4,1fr);background:var(--surface-low);margin-bottom:16px">
+    <div class="metric-cell"><div class="label-xs">Y1 Cash Flow</div><div class="metric-val" style="font-size:18px;color:<?= $r_cash_flow>=0?'var(--success)':'#ba1a1a' ?>"><?= $r_cash_flow<0?'−':'' ?><?= money(abs($r_cash_flow)) ?></div><div class="metric-sub">hold-through cost</div></div>
+    <div class="metric-cell"><div class="label-xs">Cash-on-Cash</div><div class="metric-val" style="font-size:18px"><?= pct($r_coc_return) ?></div><div class="metric-sub">on <?= money($r_equity) ?> equity</div></div>
+    <div class="metric-cell"><div class="label-xs">Break-even Occ.</div><div class="metric-val" style="font-size:18px"><?= round($r_break_even_occ,0) ?>%</div><div class="metric-sub">below = op. loss</div></div>
+    <div class="metric-cell"><div class="label-xs">Simple Payback</div><div class="metric-val" style="font-size:18px"><?= round($r_payback,1) ?> <span style="font-size:12px">yrs</span></div><div class="metric-sub">unlevered</div></div>
+</div>
+
+<?php if($fa_requires_covenant): ?>
+<div class="callout warn" style="font-size:11px">
+    <strong>Section 219 Rental Covenant:</strong> The 1.00 FSR density bonus is conditional on rental tenure (typically 60 years). Individual unit sales prohibited while covenant is in force. Building may be sold as a single income-producing asset.
+</div>
+<?php endif; ?>
+</div>
+</div><!-- /page 5b-2 outlook financing -->
+
+<!-- ───────────────── RENTAL MARKET OUTLOOK — INLINE (OUTLOOK PATH) ───────────────── -->
+<?php
+// Calc block duplicated from Page 6 rental rendering — needed here because outlook path runs before Page 6 branching
+$_ro_total_units = max(1, $rental_units);
+$_ro_wavg_rent = 0;
+foreach ($rental_rows as $_rr) { $_ro_wavg_rent += $_rr['curr'] * $_rr['units']; }
+$_ro_wavg_rent = $_ro_wavg_rent / $_ro_total_units;
+
+$_ro_rent_y5  = $_ro_wavg_rent * pow(1 + $fa_rent_growth, 5);
+$_ro_rent_y10 = $_ro_wavg_rent * pow(1 + $fa_rent_growth, 10);
+
+$_ro_value_now = $r_asset_value;
+$_ro_value_y5  = $fa_cap_rate > 0 ? $r_projections[5]['noi']  / $fa_cap_rate : 0;
+$_ro_value_y10 = $fa_cap_rate > 0 ? $r_projections[10]['noi'] / $fa_cap_rate : 0;
+
+$_ro_rent_flat_y10 = $_ro_wavg_rent;
+$_ro_noi_flat      = $r_noi;
+$_ro_value_flat    = $r_asset_value;
+
+$_ro_growth_up = $fa_rent_growth + 0.01;
+$_ro_rent_up_y10 = $_ro_wavg_rent * pow(1 + $_ro_growth_up, 10);
+$_ro_noi_up_y10 = $r_noi * pow(1 + ($_ro_growth_up - $fa_opex_growth), 10);
+$_ro_value_up = $fa_cap_rate > 0 ? $_ro_noi_up_y10 / $fa_cap_rate : 0;
+?>
+<div class="page">
+<div class="page-header">
+    <div class="page-header-title">Rental Market Outlook.</div>
+    <div class="page-header-meta">Long-term rent and value projection · <?= htmlspecialchars($nb_display) ?></div>
+</div>
+
+<div class="page-body">
+
+<!-- Three-number projection row: Now / Year 5 / Year 10 rent -->
+<div class="psf-trio" style="margin:0 -64px">
+    <div class="psf-cell" style="padding-left:64px">
+        <div class="psf-label">Current Avg Rent</div>
+        <div class="psf-val"><?= money($_ro_wavg_rent) ?></div>
+        <div class="psf-note">/ mo · weighted across <?= $_ro_total_units ?> units</div>
+    </div>
+    <div class="psf-cell">
+        <div class="psf-label">Year 5 Projection</div>
+        <div class="psf-val"><?= money($_ro_rent_y5) ?></div>
+        <div class="psf-note">/ mo · +<?= number_format((($_ro_rent_y5/$_ro_wavg_rent)-1)*100,1) ?>% cumulative</div>
+    </div>
+    <div class="psf-cell" style="padding-right:64px">
+        <div class="psf-label">Year 10 Projection</div>
+        <div class="psf-val"><?= money($_ro_rent_y10) ?></div>
+        <div class="psf-note">/ mo · +<?= number_format((($_ro_rent_y10/$_ro_wavg_rent)-1)*100,1) ?>% cumulative</div>
+    </div>
+</div>
+
+<div style="height:24px"></div>
+
+<!-- Stabilized value trajectory -->
+<div class="margin-callout" style="margin:0 -64px;padding:16px 64px">
+    <div class="margin-callout-label">Current stabilized value (NOI ÷ <?= number_format($fa_cap_rate*100,2) ?>% market cap)</div>
+    <div class="margin-callout-val"><?= money($_ro_value_now) ?></div>
+</div>
+<div class="margin-callout" style="margin:2px -64px 0;padding:16px 64px">
+    <div class="margin-callout-label">Projected Year 10 stabilized value (at <?= number_format($fa_rent_growth*100,1) ?>% rent growth)</div>
+    <div style="display:flex;align-items:baseline;gap:12px">
+        <div class="margin-callout-val"><?= money($_ro_value_y10) ?></div>
+        <div class="margin-callout-delta <?= $_ro_value_y10>=$_ro_value_now?'delta-up':'delta-dn' ?>">
+            <?= $_ro_value_y10>=$_ro_value_now?'▲':'▼' ?> <?= money(abs($_ro_value_y10-$_ro_value_now)) ?> over 10 years
+        </div>
+    </div>
+</div>
+
+<div style="height:32px"></div>
+
+<!-- Three-scenario table -->
+<div class="label-xs" style="margin-bottom:14px">Three-Scenario Analysis — Year 10 Stabilized Value</div>
+<table class="dt" style="margin-bottom:20px">
+    <thead>
+        <tr>
+            <th style="width:22%">Scenario</th>
+            <th>Rent Growth</th>
+            <th>Year 10 Rent</th>
+            <th>Year 10 Stabilized Value</th>
+            <th>vs Project Cost</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td style="font-weight:600;color:#166534">Upside (+1%)</td>
+            <td><?= number_format($_ro_growth_up*100,1) ?>% / yr</td>
+            <td class="dt-mono"><?= money($_ro_rent_up_y10) ?>/mo</td>
+            <td class="dt-mono" style="font-weight:600"><?= money($_ro_value_up) ?></td>
+            <td class="<?= $_ro_value_up>=$r_total_cost?'dt-pass':'dt-warn' ?>">
+                <?= $_ro_value_up>=$r_total_cost?'+':'' ?><?= money($_ro_value_up - $r_total_cost) ?>
+            </td>
+        </tr>
+        <tr style="background:rgba(201,168,76,0.06)">
+            <td style="font-weight:600">Base (Wynston)</td>
+            <td><?= number_format($fa_rent_growth*100,1) ?>% / yr</td>
+            <td class="dt-mono"><?= money($_ro_rent_y10) ?>/mo</td>
+            <td class="dt-mono" style="font-weight:600"><?= money($_ro_value_y10) ?></td>
+            <td class="<?= $_ro_value_y10>=$r_total_cost?'dt-pass':'dt-warn' ?>">
+                <?= $_ro_value_y10>=$r_total_cost?'+':'' ?><?= money($_ro_value_y10 - $r_total_cost) ?>
+            </td>
+        </tr>
+        <tr>
+            <td style="font-weight:600;color:#b45309">Downside (flat)</td>
+            <td>0.0% / yr</td>
+            <td class="dt-mono"><?= money($_ro_rent_flat_y10) ?>/mo</td>
+            <td class="dt-mono" style="font-weight:600"><?= money($_ro_value_flat) ?></td>
+            <td class="<?= $_ro_value_flat>=$r_total_cost?'dt-pass':'dt-warn' ?>">
+                <?= $_ro_value_flat>=$r_total_cost?'+':'' ?><?= money($_ro_value_flat - $r_total_cost) ?>
+            </td>
+        </tr>
+    </tbody>
+</table>
+
+</div>
+</div><!-- /rental market outlook inline for outlook path -->
+
+<!-- ───────────────── PAGE 5C — PATH COMPARISON ───────────────── -->
+<div class="page">
+<div class="page-header">
+    <div class="page-header-title">Path Comparison.</div>
+    <div class="page-header-meta">Strata / Sell vs Secured Rental / Hold · <?= $max_units ?> units · <?= htmlspecialchars($nb_display) ?></div>
+</div>
+<div class="page-body tight">
+
+<!-- Side by side summary table -->
+<div class="label-xs" style="margin-bottom:16px">Development Path Analysis</div>
+<table class="dt" style="margin-bottom:24px">
+    <thead>
+        <tr>
+            <th style="width:35%">Metric</th>
+            <th style="text-align:center;background:#f0fdf4;color:#166534">Strata / Sell</th>
+            <th style="text-align:center;background:#eff6ff;color:#1d4ed8">Rental / Hold</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr><td>FSR</td><td style="text-align:center;font-weight:600">0.70</td><td style="text-align:center;font-weight:600">1.00</td></tr>
+        <tr><td>Buildable Area</td><td style="text-align:center"><?= number_format($strata_buildable_sqft) ?> sqft</td><td style="text-align:center"><?= number_format($rental_buildable_sqft) ?> sqft</td></tr>
+        <tr><td>Total Project Cost</td><td style="text-align:center;font-weight:600"><?= money($s_total_cost) ?></td><td style="text-align:center;font-weight:600"><?= money($r_total_cost) ?></td></tr>
+        <tr><td>Equity Required</td><td style="text-align:center">N/A (sell on completion)</td><td style="text-align:center;font-weight:600"><?= money($r_equity) ?> (<?= $fa_is_all_cash ? '100' : number_format((1-$fa_ltc)*100) ?>%)</td></tr>
+        <tr><td>Exit / Annual Income</td><td style="text-align:center;font-weight:600;color:#166534"><?= money($s_exit_value) ?> sale</td><td style="text-align:center;font-weight:600;color:#1d4ed8"><?= money($r_noi) ?>/yr NOI</td></tr>
+        <tr><td>Profit / Cash Flow</td><td style="text-align:center;font-weight:700;color:<?= $s_profit>=0?'#166534':'#ba1a1a' ?>"><?= money($s_profit) ?></td><td style="text-align:center;font-weight:700;color:<?= $r_cash_flow>=0?'#166634':'#ba1a1a' ?>"><?= money($r_cash_flow) ?>/yr</td></tr>
+        <tr><td>ROI / Cap Rate</td><td style="text-align:center"><?= pct($s_roi) ?> ROI</td><td style="text-align:center"><?= pct($r_cap_rate) ?> cap rate</td></tr>
+        <tr><td>Cash-on-Cash Return</td><td style="text-align:center;color:var(--on-surface-var)">—</td><td style="text-align:center;font-weight:600"><?= pct($r_coc_return) ?></td></tr>
+        <tr><td>Payback Period</td><td style="text-align:center;color:var(--on-surface-var)">N/A (one-time sale)</td><td style="text-align:center"><?= round($r_payback,1) ?> years</td></tr>
+        <tr><td>Stabilised Asset Value</td><td style="text-align:center;color:var(--on-surface-var)">—</td><td style="text-align:center;font-weight:600"><?= money($r_asset_value) ?></td></tr>
+        <tr><td>Can Sell Individual Units</td><td style="text-align:center;color:#166534;font-weight:600">✓ Yes</td><td style="text-align:center;color:<?= $fa_requires_covenant ? '#b45309' : '#166534' ?>;font-weight:600"><?= $fa_requires_covenant ? '✗ Covenant restricted' : '✓ Yes' ?></td></tr>
+    </tbody>
+</table>
+
+<!-- Visual bar comparison -->
+<?php
+$max_bar = max($s_exit_value, $r_asset_value, 1);
+$bars = [
+    ['label'=>'Strata Exit Value','val'=>$s_exit_value,'color'=>'#000a1e'],
+    ['label'=>'Rental Asset Value','val'=>$r_asset_value,'color'=>'#1d4ed8'],
+    ['label'=>'Strata Profit','val'=>max($s_profit,0),'color'=>'#166534'],
+    ['label'=>'Annual NOI (×10)','val'=>$r_noi*10,'color'=>'#0369a1'],
+];
+?>
+<div class="label-xs" style="margin-bottom:12px">Visual Comparison</div>
+<div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px">
+<?php foreach($bars as $bar): $w=round(($bar['val']/$max_bar)*100); ?>
+<div style="display:flex;align-items:center;gap:12px;font-size:11px">
+    <div style="width:160px;flex-shrink:0;color:var(--on-surface-var)"><?= $bar['label'] ?></div>
+    <div style="flex:1;background:var(--surface-low);height:24px;position:relative">
+        <div style="width:<?= min($w,100) ?>%;height:100%;background:<?= $bar['color'] ?>;opacity:.85"></div>
+    </div>
+    <div style="width:90px;text-align:right;font-weight:600;color:var(--on-surface)"><?= money($bar['val']) ?></div>
+</div>
+<?php endforeach; ?>
+<div style="font-size:10px;color:var(--on-surface-var);font-style:italic">* Annual NOI shown at 10× for scale comparison with capital values.</div>
+</div>
+
+<!-- Unit mix donut — strata -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:32px;align-items:start">
+<div>
+    <div class="label-xs" style="margin-bottom:10px">Strata Unit Mix</div>
+    <?php
+    $br_counts2=[1=>0,2=>0,3=>0];
+    foreach($unit_mix as $u) $br_counts2[$u['br']]++;
+    $total_u2=count($unit_mix);
+    $segs2=[];$offset2=0;
+    $dv2=[$br_counts2[2],$br_counts2[1],$br_counts2[3]];
+    $dc2=['#000a1e','#c9a84c','#8da3c0'];
+    $dl2=['2 Bedroom','1 Bedroom','3 Bedroom'];
+    foreach($dv2 as $i=>$v){$p=$total_u2>0?$v/$total_u2:0;$d=$p*$circumference;$g=$circumference-$d;$segs2[]=[$d,$g,$offset2,$dc2[$i],$dl2[$i],$v,$p];$offset2+=$d;}
+    ?>
+    <svg viewBox="0 0 200 200" style="width:130px;height:130px;display:block;margin:0 auto 8px">
+        <?php foreach($segs2 as $s): if($s[5]===0)continue; ?>
+        <circle cx="100" cy="100" r="70" fill="none" stroke="<?=$s[3]?>" stroke-width="28"
+            stroke-dasharray="<?=$s[0]?> <?=$s[1]?>" stroke-dashoffset="-<?=$s[2]?>"
+            transform="rotate(-90 100 100)"/>
+        <?php endforeach; ?>
+        <text x="100" y="96" text-anchor="middle" font-family="Noto Serif,serif" font-size="26" font-weight="700" fill="#000a1e"><?=$total_u2?></text>
+        <text x="100" y="112" text-anchor="middle" font-family="Work Sans,sans-serif" font-size="7" letter-spacing="1" fill="#2d3a52">UNITS</text>
+    </svg>
+    <div style="display:flex;flex-direction:column;gap:4px;font-size:10px">
+        <?php foreach($segs2 as $s): if($s[5]===0)continue; ?>
+        <div style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;background:<?=$s[3]?>;display:inline-block;flex-shrink:0"></span><?=$s[4]?> (<?=round($s[6]*100)?>%)</div>
+        <?php endforeach; ?>
+    </div>
+</div>
+<div>
+    <div class="label-xs" style="margin-bottom:10px">Key Consideration</div>
+    <div style="font-size:11px;color:var(--on-surface-var);line-height:1.8">
+        <strong style="color:var(--on-surface)">Choose Strata if:</strong> you need capital returned on completion, have no long-term equity goals, or market conditions favour pre-sales.<br><br>
+        <strong style="color:var(--on-surface)">Choose Rental if:</strong> you want long-term income, have access to <?= money($r_equity) ?> equity, and qualify for <?= htmlspecialchars($fa_name) ?> financing.<?php if($fa_amort >= 25): ?> The <?= number_format($fa_amort) ?>-year amortization materially reduces monthly payments vs conventional.<?php endif; ?><br><br>
+        <strong style="color:var(--on-surface)">Note:</strong> <?php if($fa_requires_covenant): ?>The rental path carries a Section 219 covenant — individual unit sales are prohibited during the covenant period.<?php else: ?>Rental tenure requirements vary by financing type. Confirm restrictions with your lender and the City of Vancouver.<?php endif; ?>
+    </div>
+</div>
 </div>
 
 </div>
-</div><!-- /page 6 -->
+</div><!-- /page 5c comparison -->
+
+<?php endif; // end path branching for page 5 ?>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     PAGE 6 — WYNSTON OUTLOOK
+     Path-aware: strata shows 12-month $/sqft forecast
+                 rental shows 5/10-yr rent & value projection (Option B - scenario-based)
+═══════════════════════════════════════════════════════════════════════════ -->
+<?php if ($pro_forma_path === 'rental'): ?>
+
+<!-- ───────── PAGE 6 (RENTAL) — RENTAL MARKET OUTLOOK ───────── -->
+<?php
+// Use the weighted avg rent from Page 4 (same calc)
+$_ro_total_units = max(1, $rental_units);
+$_ro_wavg_rent = 0;
+foreach ($rental_rows as $_rr) { $_ro_wavg_rent += $_rr['curr'] * $_rr['units']; }
+$_ro_wavg_rent = $_ro_wavg_rent / $_ro_total_units;
+
+// Projected rent at admin-set growth rate
+$_ro_rent_y5  = $_ro_wavg_rent * pow(1 + $fa_rent_growth, 5);
+$_ro_rent_y10 = $_ro_wavg_rent * pow(1 + $fa_rent_growth, 10);
+
+// Projected stabilized values at each horizon (NOI at Y5/Y10 ÷ market cap rate)
+$_ro_value_now = $r_asset_value;
+$_ro_value_y5  = $fa_cap_rate > 0 ? $r_projections[5]['noi']  / $fa_cap_rate : 0;
+$_ro_value_y10 = $fa_cap_rate > 0 ? $r_projections[10]['noi'] / $fa_cap_rate : 0;
+
+// Downside scenario: 0% rent growth, rents flatten
+$_ro_rent_flat_y10 = $_ro_wavg_rent;
+$_ro_noi_flat      = $r_noi;  // NOI stays at Y1 level if rents flat + opex flat
+$_ro_value_flat    = $r_asset_value;
+
+// Upside scenario: +1% above assumption
+$_ro_growth_up = $fa_rent_growth + 0.01;
+$_ro_rent_up_y10 = $_ro_wavg_rent * pow(1 + $_ro_growth_up, 10);
+// Approximate NOI scaling — NOI grows proportional to rent growth (not perfect but reasonable)
+$_ro_noi_up_y10 = $r_noi * pow(1 + ($_ro_growth_up - $fa_opex_growth), 10);
+$_ro_value_up = $fa_cap_rate > 0 ? $_ro_noi_up_y10 / $fa_cap_rate : 0;
+?>
+<div class="page">
+<div class="page-header">
+    <div class="page-header-title">Rental Market Outlook.</div>
+    <div class="page-header-meta">Long-term rent and value projection · <?= htmlspecialchars($nb_display) ?></div>
+</div>
+
+<div class="page-body">
+
+<!-- Three-number projection row: Now / Year 5 / Year 10 rent -->
+<div class="psf-trio" style="margin:0 -64px">
+    <div class="psf-cell" style="padding-left:64px">
+        <div class="psf-label">Current Avg Rent</div>
+        <div class="psf-val"><?= money($_ro_wavg_rent) ?></div>
+        <div class="psf-note">/ mo · weighted across <?= $_ro_total_units ?> units</div>
+    </div>
+    <div class="psf-cell">
+        <div class="psf-label">Year 5 Projection</div>
+        <div class="psf-val"><?= money($_ro_rent_y5) ?></div>
+        <div class="psf-note">/ mo · +<?= number_format((($_ro_rent_y5/$_ro_wavg_rent)-1)*100,1) ?>% cumulative</div>
+    </div>
+    <div class="psf-cell" style="padding-right:64px">
+        <div class="psf-label">Year 10 Projection</div>
+        <div class="psf-val"><?= money($_ro_rent_y10) ?></div>
+        <div class="psf-note">/ mo · +<?= number_format((($_ro_rent_y10/$_ro_wavg_rent)-1)*100,1) ?>% cumulative</div>
+    </div>
+</div>
+
+<div style="height:24px"></div>
+
+<!-- Stabilized value trajectory -->
+<div class="margin-callout" style="margin:0 -64px;padding:16px 64px">
+    <div class="margin-callout-label">Current stabilized value (NOI ÷ <?= number_format($fa_cap_rate*100,2) ?>% market cap)</div>
+    <div class="margin-callout-val"><?= money($_ro_value_now) ?></div>
+</div>
+<div class="margin-callout" style="margin:2px -64px 0;padding:16px 64px">
+    <div class="margin-callout-label">Projected Year 10 stabilized value (at <?= number_format($fa_rent_growth*100,1) ?>% rent growth)</div>
+    <div style="display:flex;align-items:baseline;gap:12px">
+        <div class="margin-callout-val"><?= money($_ro_value_y10) ?></div>
+        <div class="margin-callout-delta <?= $_ro_value_y10>=$_ro_value_now?'delta-up':'delta-dn' ?>">
+            <?= $_ro_value_y10>=$_ro_value_now?'▲':'▼' ?> <?= money(abs($_ro_value_y10-$_ro_value_now)) ?> over 10 years
+        </div>
+    </div>
+</div>
+
+<div style="height:32px"></div>
+
+<!-- Three-scenario table -->
+<div class="label-xs" style="margin-bottom:14px">Three-Scenario Analysis — Year 10 Stabilized Value</div>
+<table class="dt" style="margin-bottom:20px">
+    <thead>
+        <tr>
+            <th style="width:22%">Scenario</th>
+            <th>Rent Growth</th>
+            <th>Year 10 Rent</th>
+            <th>Year 10 Stabilized Value</th>
+            <th>vs Project Cost</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td style="font-weight:600;color:#166534">Upside (+1%)</td>
+            <td><?= number_format($_ro_growth_up*100,1) ?>% / yr</td>
+            <td class="dt-mono"><?= money($_ro_rent_up_y10) ?>/mo</td>
+            <td class="dt-mono" style="font-weight:600"><?= money($_ro_value_up) ?></td>
+            <td class="<?= $_ro_value_up>=$r_total_cost?'dt-pass':'dt-warn' ?>">
+                <?= $_ro_value_up>=$r_total_cost?'+':'' ?><?= money($_ro_value_up - $r_total_cost) ?>
+            </td>
+        </tr>
+        <tr style="background:rgba(201,168,76,0.06)">
+            <td style="font-weight:600">Base (Wynston)</td>
+            <td><?= number_format($fa_rent_growth*100,1) ?>% / yr</td>
+            <td class="dt-mono"><?= money($_ro_rent_y10) ?>/mo</td>
+            <td class="dt-mono" style="font-weight:600"><?= money($_ro_value_y10) ?></td>
+            <td class="<?= $_ro_value_y10>=$r_total_cost?'dt-pass':'dt-warn' ?>">
+                <?= $_ro_value_y10>=$r_total_cost?'+':'' ?><?= money($_ro_value_y10 - $r_total_cost) ?>
+            </td>
+        </tr>
+        <tr>
+            <td style="font-weight:600;color:#b45309">Downside (flat)</td>
+            <td>0.0% / yr</td>
+            <td class="dt-mono"><?= money($_ro_rent_flat_y10) ?>/mo</td>
+            <td class="dt-mono" style="font-weight:600"><?= money($_ro_value_flat) ?></td>
+            <td class="<?= $_ro_value_flat>=$r_total_cost?'dt-pass':'dt-warn' ?>">
+                <?= $_ro_value_flat>=$r_total_cost?'+':'' ?><?= money($_ro_value_flat - $r_total_cost) ?>
+            </td>
+        </tr>
+    </tbody>
+</table>
+
+</div>
+</div><!-- /page 6 rental -->
+
+<?php elseif ($pro_forma_path === 'strata'): // only strata renders Wynston Outlook here (outlook path rendered it inline earlier) ?>
+
+<div class="page">
+<div class="page-header">
+    <div class="page-header-title">Wynston Outlook.</div>
+    <div class="page-header-meta">12-month $/sqft intelligence · <?= htmlspecialchars($nb_display) ?> · <?= htmlspecialchars($outlook_quarter??'Current Quarter') ?></div>
+</div>
+
+<div class="page-body">
+
+<?php if(!empty($outlook_data)): ?>
+
+<div class="psf-trio" style="margin:0 -64px">
+    <div class="psf-cell" style="padding-left:64px">
+        <div class="psf-label">Build Cost</div>
+        <div class="psf-val"><?= money($build_psf) ?></div>
+        <div class="psf-note">/ sqft · current</div>
+    </div>
+    <div class="psf-cell">
+        <div class="psf-label"><?= htmlspecialchars($psf_label) ?></div>
+        <div class="psf-val"><?= money($current_psf) ?></div>
+        <div class="psf-note">/ sqft · <?= htmlspecialchars($data_as_of) ?><?= $psf_override!==null?' <span style="color:#b45309">(adjusted)</span>':'' ?></div>
+    </div>
+    <div class="psf-cell" style="padding-right:64px">
+        <div class="psf-label">Wynston Outlook</div>
+        <div class="psf-val"><?= money($outlook_psf) ?></div>
+        <div class="psf-note">/ sqft · 12-month projection</div>
+    </div>
+</div>
+
+<div style="height:32px"></div>
+
+<div class="margin-callout" style="margin:0 -64px;padding:16px 64px">
+    <div class="margin-callout-label">Current margin (sold − build)</div>
+    <div class="margin-callout-val"><?= money($current_margin) ?>/sqft</div>
+</div>
+<div class="margin-callout" style="margin:2px -64px 0;padding:16px 64px">
+    <div class="margin-callout-label">Projected margin (12-month)</div>
+    <div style="display:flex;align-items:baseline;gap:12px">
+        <div class="margin-callout-val"><?= money($proj_margin) ?>/sqft</div>
+        <div class="margin-callout-delta <?= $proj_margin>=$current_margin?'delta-up':'delta-dn' ?>">
+            <?= $proj_margin>=$current_margin?'▲':'▼' ?> <?= money(abs($proj_margin-$current_margin)) ?>/sqft
+        </div>
+    </div>
+</div>
+
+<div style="height:36px"></div>
+
+<!-- Three-layer methodology -->
+<div class="label-xs" style="margin-bottom:16px">Three-Layer Methodology — Weighted Outlook Formula</div>
+
+<div class="outlook-layer-header">
+    <div class="ol-name">Layer</div>
+    <div class="ol-sig" style="text-align:center">Signal</div>
+    <div class="ol-wt" style="text-align:center">Weight</div>
+    <div class="ol-ct" style="text-align:center">Contribution</div>
+    <div class="ol-src" style="text-align:right">Source</div>
+</div>
+
+<?php foreach([
+    ['Macro Signal',     $outlook_data['macro'],      $outlook_data['mw'], '6 institutional forecasts'],
+    ['Local Momentum',   $outlook_data['local'],      $outlook_data['lw'], 'Neighbourhood HPI history'],
+    ['Pipeline Signal',  $outlook_data['pipeline'],   $outlook_data['pw'], 'Active permit count'],
+    ['Population Signal',$outlook_data['population'], $outlook_data['pw2'],'Stats Canada Census'],
+] as $l): ?>
+<div class="outlook-layer-row">
+    <div class="ol-name"><?= $l[0] ?></div>
+    <div class="ol-sig"><?= $l[1]>=0?'+':'' ?><?= pct($l[1]) ?></div>
+    <div class="ol-wt"><?= round($l[2]*100) ?>%</div>
+    <div class="ol-ct"><?= number_format($l[1]*$l[2],2) ?>%</div>
+    <div class="ol-src"><?= $l[3] ?></div>
+</div>
+<?php endforeach; ?>
+
+<div class="outlook-layer-row total">
+    <div class="ol-name">Combined Wynston Outlook</div>
+    <div class="ol-sig"><?= $outlook_pct>=0?'+':'' ?><?= pct($outlook_pct) ?></div>
+    <div class="ol-wt">100%</div>
+    <div class="ol-ct"><?= $outlook_pct>=0?'+':'' ?><?= pct($outlook_pct) ?></div>
+    <div class="ol-src"></div>
+</div>
+
+<div class="tonal-divider"></div>
+
+<?php if(!empty($outlook_data['low'])&&!empty($outlook_data['high'])): ?>
+<div style="display:flex;gap:32px;margin-bottom:16px">
+    <div>
+        <div class="label-xs" style="margin-bottom:4px">Confidence Range</div>
+        <div style="font-size:14px;color:var(--on-surface)"><?= pct($outlook_data['low']) ?> to <?= pct($outlook_data['high']) ?></div>
+    </div>
+    <div>
+        <div class="label-xs" style="margin-bottom:4px">Quarter</div>
+        <div style="font-size:14px;color:var(--on-surface)"><?= htmlspecialchars($outlook_quarter) ?></div>
+    </div>
+    <?php if(!empty($outlook_sources)): ?>
+    <div style="flex:1">
+        <div class="label-xs" style="margin-bottom:4px">Macro Sources</div>
+        <div style="font-size:11px;color:var(--on-surface-var)"><?= htmlspecialchars(implode(' · ',$outlook_sources)) ?></div>
+    </div>
+    <?php endif; ?>
+</div>
+<?php endif; ?>
+
+<?php else: ?>
+<div class="callout">Wynston Outlook not yet available for <?= htmlspecialchars($nb_display) ?>. Enter quarterly bank/broker forecasts via the admin panel (Wynston Outlook tab) to enable this section.</div>
+<?php endif; ?>
+
+</div>
+</div><!-- /page 6 strata/outlook -->
+
+<?php endif; // end path-aware wynston outlook ?>
 
 
 <!-- ═══════════════════════════════════════════════════════════════════════════
@@ -2092,13 +2973,16 @@ $bars = [
 </div>
 
 <?php if($pro_forma_path==='rental'||$pro_forma_path==='outlook'): ?>
+<?php if(!$fa_is_all_cash): ?>
 <div class="risk-item active">
     <div class="risk-num">6</div>
     <div class="risk-body">
         <div class="risk-title">Interest Rate Reset Risk — Rental Path</div>
-        <div class="risk-desc">CMHC MLI Select is typically fixed for 5-year terms. At current assumptions (<?= number_format($fa_rate*100,2) ?>%), annual debt service is <?= money($r_annual_debt) ?>. A 1% rate increase at renewal adds approximately <?= money($r_loan_total*0.01) ?>/year, reducing annual cash flow from <?= money($r_cash_flow) ?> to approximately <?= money($r_cash_flow-$r_loan_total*0.01) ?>. Stress-test your hold strategy at rates up to 7.5% before committing.</div>
+        <div class="risk-desc"><?= htmlspecialchars($fa_name) ?> financing is typically fixed for 5-year terms. At current assumptions (<?= number_format($fa_rate*100,2) ?>%), annual debt service is <?= money($r_annual_debt) ?>. A 1% rate increase at renewal adds approximately <?= money($r_loan_total*0.01) ?>/year, reducing annual cash flow from <?= money($r_cash_flow) ?> to approximately <?= money($r_cash_flow-$r_loan_total*0.01) ?>. Stress-test your hold strategy at rates up to 7.5% before committing.</div>
     </div>
 </div>
+<?php endif; ?>
+<?php if($fa_requires_covenant): ?>
 <div class="risk-item active">
     <div class="risk-num">7</div>
     <div class="risk-body">
@@ -2106,6 +2990,7 @@ $bars = [
         <div class="risk-desc">The Section 219 rental covenant registered as a condition of the 1.00 FSR density bonus prohibits strata-titling or individual unit sale, typically for 60 years. If market conditions improve, you cannot convert to strata to capture per-unit appreciation. The only exit is sale of the entire building as a single income-producing asset. Confirm your investment horizon is compatible with this restriction before committing.</div>
     </div>
 </div>
+<?php endif; ?>
 <div class="risk-item">
     <div class="risk-num">8</div>
     <div class="risk-body">
@@ -2252,10 +3137,10 @@ $bars = [
 
     <div class="back-sources">
         <div class="back-sources-label">Data Sources</div>
-        <div class="back-sources-text">REBGV MLS (new builds 2024+) · City of Vancouver Open Data · BC Assessment · TransLink GTFS · CMHC · BC Stats BCPI · Stats Canada Census (2021) · RBC / TD / BMO / BCREA / RE/MAX / Royal LePage institutional forecasts</div>
-        <div class="back-disclaimer">This report has been prepared by <?= htmlspecialchars(!empty($company_name) ? $company_name : $agent_name) ?> for informational purposes only. It does not constitute financial, investment, legal, or real estate advice. All market intelligence and feasibility data is sourced from publicly available datasets and proprietary analytical models. Pro forma figures are estimates only and subject to change without notice. Past performance does not guarantee future results. Always consult a licensed professional before making investment decisions. © <?= date('Y') ?> <?= htmlspecialchars(!empty($company_name) ? $company_name : $agent_name) ?>. Report ID: <?= $report_id ?>.</div>
-        <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.08);font-size:9px;color:rgba(255,255,255,.2);letter-spacing:.05em">
-            Powered by <strong style="color:rgba(255,255,255,.35)">W.I.N — Wynston Intelligent Navigator</strong> · wynston.ca
+        <div class="back-sources-text">New builds 2020+ · City of Vancouver Open Data · BC Assessment · TransLink GTFS · CMHC · BC Stats BCPI · Stats Canada Census (2021) · RBC / TD / BMO / BCREA / RE/MAX / Royal LePage institutional forecasts</div>
+        <div class="back-disclaimer">This report is prepared by <?= htmlspecialchars(!empty($company_name) ? $company_name : $agent_name) ?> for the intended recipient only and is confidential. It is not financial, investment, legal, appraisal, or real estate advice, and does not constitute a recommendation to buy, sell, lease, or develop any property. All figures are estimates based on data available as of the report date, may contain errors, and are subject to revision without notice. Actual land values, construction costs, market conditions, rental income, tax treatment, permit timelines, and regulatory requirements may differ materially from those shown. Rental market projections are scenario-based illustrations, not forecasts. The recipient is solely responsible for verifying all information and must engage licensed professionals (realtor, appraiser, architect, lawyer, accountant, lender, engineer) before making any investment or development decision. <?= htmlspecialchars(!empty($company_name) ? $company_name : $agent_name) ?> accepts no liability for any loss or damage arising from reliance on this report. Past performance does not guarantee future results. Not for redistribution. © <?= date('Y') ?> <?= htmlspecialchars(!empty($company_name) ? $company_name : $agent_name) ?>. Report ID: <?= $report_id ?>.</div>
+        <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.08);font-size:9px;color:rgba(255,255,255,.45);letter-spacing:.05em">
+            Powered by <strong style="color:rgba(255,255,255,.55)">W.I.N — Wynston Intelligent Navigator</strong> · wynston.ca
         </div>
     </div>
 

@@ -11,8 +11,6 @@ require_once __DIR__ . '/../dev-auth.php';
 <link href="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css" rel="stylesheet">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
@@ -87,9 +85,6 @@ html,body{height:100%;overflow:hidden;font-family:'Segoe UI',system-ui,sans-seri
 .w-tool-info:hover .w-tooltip{display:block}
 .w-tool-menu-minimize{background:none;border:none;cursor:pointer;color:rgba(255,255,255,.4);font-size:12px;padding:2px 4px;line-height:1;transition:color .15s}
 .w-tool-menu-minimize:hover{color:var(--gold)}
-.w-3d-btn{position:fixed;bottom:28px;right:calc(var(--panel-w) + 12px);z-index:100;background:var(--navy);border:1.5px solid var(--gold);color:var(--gold);font-size:12px;font-weight:700;padding:8px 16px;border-radius:20px;cursor:pointer;transition:.2s;display:none}
-.w-3d-btn:hover{background:var(--gold);color:var(--navy)}
-.w-3d-btn.visible{display:block}
 .w-panel{position:fixed;top:var(--header-h);right:0;bottom:0;width:var(--panel-w);background:var(--cream);transform:translateX(100%);transition:transform .3s ease;z-index:150;display:flex;flex-direction:column;overflow:hidden}
 .w-panel.open{transform:translateX(0)}
 .w-panel-head{background:var(--navy);padding:14px 16px;flex-shrink:0}
@@ -143,6 +138,29 @@ html,body{height:100%;overflow:hidden;font-family:'Segoe UI',system-ui,sans-seri
 .w-rent-table{width:100%;border-collapse:collapse;font-size:12px}
 .w-rent-table th{padding:4px 6px;color:#999;font-weight:700;text-align:left;font-size:10px;text-transform:uppercase}
 .w-rent-table td{padding:6px 6px;border-top:1px solid rgba(0,0,0,.05)}
+/* ── Editable pro forma rows ── */
+.w-pf-edit-wrap{display:flex;align-items:center;gap:6px}
+.w-pf-edit-btn{background:none;border:none;cursor:pointer;color:#bbb;font-size:11px;padding:2px 4px;border-radius:4px;transition:.15s;flex-shrink:0}
+.w-pf-edit-btn:hover{color:var(--gold);background:rgba(201,168,76,.1)}
+.w-pf-edit-btn.active{color:var(--gold)}
+.w-pf-edit-input{width:80px;border:1px solid var(--gold);border-radius:4px;padding:2px 6px;font-size:12px;font-weight:700;color:var(--navy);text-align:right;background:#fff}
+.w-pf-edit-input:focus{outline:none;box-shadow:0 0 0 2px rgba(201,168,76,.3)}
+.w-pf-sub{font-size:10px;color:#bbb;padding:0 0 5px;line-height:1.4}
+/* ── HPI toggle switch ── */
+.w-hpi-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0}
+.w-hpi-label{font-size:12px;color:#555}
+.w-hpi-val{font-size:12px;font-weight:700;color:#555}
+.w-hpi-row.active .w-hpi-label{color:var(--navy)}
+.w-hpi-row.active .w-hpi-val{color:var(--navy)}
+.w-hpi-row.muted .w-hpi-label{color:#ccc}
+.w-hpi-row.muted .w-hpi-val{color:#ccc;text-decoration:line-through}
+.w-toggle{position:relative;display:inline-block;width:34px;height:18px;flex-shrink:0}
+.w-toggle input{opacity:0;width:0;height:0}
+.w-toggle-slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#ddd;border-radius:18px;transition:.2s}
+.w-toggle-slider:before{position:absolute;content:"";height:14px;width:14px;left:2px;bottom:2px;background:#fff;border-radius:50%;transition:.2s}
+.w-toggle input:checked+.w-toggle-slider{background:var(--navy)}
+.w-toggle input:checked+.w-toggle-slider:before{transform:translateX(16px)}
+.w-exit-note{font-size:10px;color:var(--amber);padding:2px 0 4px;font-style:italic}
 .w-rent-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px}
 .w-outlook-block{background:#fff;border-radius:10px;padding:12px;margin-top:10px}
 .w-psf-row{display:flex;justify-content:space-between;font-size:12px;padding:4px 0;color:#666}
@@ -197,13 +215,14 @@ html,body{height:100%;overflow:hidden;font-family:'Segoe UI',system-ui,sans-seri
 /* Replaced circle pins with rounded squares — */
 /* gives a property-footprint feel on the map   */
 .mapboxgl-canvas{cursor:default}
-@media(max-width:700px){:root{--panel-w:100vw}.w-3d-btn{right:12px;bottom:80px}.w-tool-menu{top:calc(var(--header-h) + 70px)}}
-.sp-wrap{display:flex;flex-wrap:wrap;gap:5px}
-.sp-pill{background:rgba(0,36,70,.08);border:1px solid rgba(0,36,70,.2);color:#666;font-size:10px;font-weight:700;padding:4px 10px;border-radius:20px;cursor:pointer;transition:.15s;white-space:nowrap}
-.sp-pill:hover{background:rgba(0,36,70,.15);border-color:var(--navy);color:var(--navy)}
-.sp-pill.active{background:var(--navy);border-color:var(--navy);color:#fff}
-.w-viz-btn{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin-top:10px;padding:9px;background:var(--navy);color:var(--gold);border:1.5px solid var(--gold);border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;transition:.2s}
-.w-viz-btn:hover{background:var(--gold);color:var(--navy)}
+@media(max-width:700px){:root{--panel-w:100vw}.w-tool-menu{top:calc(var(--header-h) + 70px)}}
+/* Standardized Design credit checkbox — lives in cost section of both tabs */
+.w-stddesign{margin:8px 0 4px;padding:10px 12px;background:rgba(0,36,70,.04);border:1px solid rgba(0,36,70,.1);border-radius:6px;display:flex;align-items:flex-start;gap:10px;cursor:pointer;transition:.15s}
+.w-stddesign:hover{background:rgba(0,36,70,.07);border-color:rgba(0,36,70,.2)}
+.w-stddesign input[type=checkbox]{margin-top:2px;cursor:pointer;accent-color:var(--navy);flex-shrink:0}
+.w-stddesign-body{flex:1;font-size:11px;line-height:1.4;color:#333}
+.w-stddesign-title{font-weight:700;color:var(--navy);margin-bottom:2px}
+.w-stddesign-credit{color:#166534;font-weight:700}
 .sp-btn{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.7);font-size:11px;font-weight:600;padding:5px 11px;border-radius:20px;cursor:pointer;transition:.15s;white-space:nowrap}
 .sp-btn:hover{background:rgba(201,168,76,.15);border-color:var(--gold);color:var(--gold)}
 .sp-btn.active{background:rgba(201,168,76,.2);border-color:var(--gold);color:var(--gold)}
@@ -244,7 +263,7 @@ html,body{height:100%;overflow:hidden;font-family:'Segoe UI',system-ui,sans-seri
     <div id="tool-sections">
       <div class="w-tool-section">
         <div class="w-tool-section-label">Visibility</div>
-        <div class="w-tool-toggle active" id="tgl-halos" onclick="toolToggle('halos')">
+        <div class="w-tool-toggle" id="tgl-halos" onclick="toolToggle('halos')">
           <div class="w-tool-toggle-icon icon-gold"><i class="fas fa-circle"></i></div>
           <span class="w-tool-toggle-label">Transit Halos</span>
           <div class="w-tool-switch"></div>
@@ -268,21 +287,21 @@ html,body{height:100%;overflow:hidden;font-family:'Segoe UI',system-ui,sans-seri
       </div>
       <div class="w-tool-section">
         <div class="w-tool-section-label">Filter Lots</div>
-        <div class="w-tool-toggle" id="tgl-6unit" onclick="toolToggle('6unit')">
+        <div class="w-tool-toggle active" id="tgl-6unit" onclick="toolToggle('6unit')">
           <div class="w-tool-toggle-icon icon-green"><span style="font-size:10px;font-weight:800">6U</span></div>
-          <span class="w-tool-toggle-label">6-Unit Eligible Only</span>
+          <span class="w-tool-toggle-label">6-Unit Eligible</span>
           <i class="w-tool-info">ⓘ<span class="w-tooltip">Lots ≥15.1m wide with lane access and transit proximity. Eligible for the maximum 6-unit multiplex under COV R1-1 zoning.</span></i>
           <div class="w-tool-switch"></div>
         </div>
-        <div class="w-tool-toggle" id="tgl-4unit" onclick="toolToggle('4unit')">
+        <div class="w-tool-toggle active" id="tgl-4unit" onclick="toolToggle('4unit')">
           <div class="w-tool-toggle-icon icon-teal"><span style="font-size:10px;font-weight:800">4U</span></div>
-          <span class="w-tool-toggle-label">4-Unit Eligible Only</span>
+          <span class="w-tool-toggle-label">4-Unit Eligible</span>
           <i class="w-tool-info">ⓘ<span class="w-tooltip">Lots 10.0m–15.09m wide with lane access. Eligible for a 4-unit multiplex. May qualify for 6 units with a neighbour buyout.</span></i>
           <div class="w-tool-switch"></div>
         </div>
-        <div class="w-tool-toggle" id="tgl-duplex" onclick="toolToggle('duplex')">
+        <div class="w-tool-toggle active" id="tgl-duplex" onclick="toolToggle('duplex')">
           <div class="w-tool-toggle-icon icon-amber"><span style="font-size:10px;font-weight:800">2U</span></div>
-          <span class="w-tool-toggle-label">Duplex / 3-Unit Only</span>
+          <span class="w-tool-toggle-label">Duplex / 3-Unit Eligible</span>
           <i class="w-tool-info">ⓘ<span class="w-tooltip">Lots 7.5m–9.99m wide with lane access. Eligible for a duplex or 3-unit build — the entry point for small-scale multiplex development.</span></i>
           <div class="w-tool-switch"></div>
         </div>
@@ -331,10 +350,6 @@ html,body{height:100%;overflow:hidden;font-family:'Segoe UI',system-ui,sans-seri
 
 <div id="map"></div>
 
-<button class="w-3d-btn" id="btn3d" onclick="toggle3D()">
-  <i class="fas fa-cube" style="margin-right:5px"></i>Visualize Build
-</button>
-
 <aside class="w-panel" id="panel">
   <div class="w-panel-head" id="panel-head">
     <button class="w-panel-close" onclick="closePanel()">×</button>
@@ -346,7 +361,7 @@ html,body{height:100%;overflow:hidden;font-family:'Segoe UI',system-ui,sans-seri
   <div class="w-tabs" id="pf-tabs" style="display:none">
     <div class="w-tab active" id="tab-strata"  onclick="switchTab('strata')">Multiplex / Sale</div>
     <div class="w-tab"        id="tab-rental"  onclick="switchTab('rental')">Secured Rental</div>
-    <div class="w-tab"        id="tab-outlook" onclick="switchTab('outlook')">Wynston Estimate</div>
+    <div class="w-tab"        id="tab-compare" onclick="switchTab('compare')">Compare</div>
   </div>
   <div class="w-panel-body" id="panel-body">
     <div class="w-panel-empty" id="panel-empty">
@@ -365,9 +380,9 @@ const MAPBOX_TOKEN = 'pk.eyJ1IjoiaGVucmluZ3V5ZW4iLCJhIjoiY21uYjg3dTNnMHFkZjJwcHR
 const IS_LOGGED_IN = <?= isset($_SESSION['dev_id']) ? 'true' : 'false' ?>;
 
 // ── State ─────────────────────────────────────────────────────
-let map, currentLot = null, currentLotLat = 0, currentLotLng = 0, is3D = false, fetchSeq = 0;
+let map, currentLot = null, currentLotLat = 0, currentLotLng = 0, fetchSeq = 0;
 let currentPath = 'strata', currentData = null;
-let toolState = { halos:true, skytrain:true, permits:true, neighbourhoods:false, '6unit':false, '4unit':false, duplex:false, buyout:false, nopark:false, heritage:false, peat:false, flood:false };
+let toolState = { halos:false, skytrain:true, permits:true, neighbourhoods:false, '6unit':true, '4unit':true, duplex:true, buyout:false, nopark:false, heritage:false, peat:false, flood:false };
 
 // ── Property highlight ─────────────────────────────────────────
 // Pulsing gold ring shown on the selected lot — makes it easy to
@@ -470,33 +485,49 @@ function addMapSourcesAndLayers() {
         'circle-color':'#c9a84c', 'circle-opacity':1 } });
 
   // ── Neighbourhood boundary layers ─────────────────────────
-  // Outline
+  // Dark casing layer underneath the gold outline — gives the line a clear
+  // silhouette against colored pins and street colors, readable at any zoom.
+  if (!map.getLayer('neighbourhood-casing'))
+    map.addLayer({ id:'neighbourhood-casing', type:'line', source:'neighbourhood-boundaries',
+      layout:{ visibility:'none' },
+      paint:{
+        'line-color':'#001426',
+        'line-width':['interpolate',['linear'],['zoom'],10,3,14,5,16,6.5],
+        'line-opacity':0.85,
+      }});
+
+  // Gold outline sits on top of the casing
   if (!map.getLayer('neighbourhood-lines'))
     map.addLayer({ id:'neighbourhood-lines', type:'line', source:'neighbourhood-boundaries',
       layout:{ visibility:'none' },
       paint:{
         'line-color':'#c9a84c',
-        'line-width':['interpolate',['linear'],['zoom'],10,1,14,2,16,2.5],
-        'line-opacity':0.7,
-        'line-dasharray':[3,2],
+        'line-width':['interpolate',['linear'],['zoom'],10,1.5,14,2.5,16,3],
+        'line-opacity':1,
       }});
 
-  // Labels
+  // Labels — bold white text, thick dark navy halo, hides at close zoom
   if (!map.getLayer('neighbourhood-labels'))
     map.addLayer({ id:'neighbourhood-labels', type:'symbol', source:'neighbourhood-boundaries',
       layout:{
         visibility:'none',
         'text-field':['get','name'],
-        'text-size':['interpolate',['linear'],['zoom'],10,10,13,13,15,15],
-        'text-font':['DIN Offc Pro Medium','Arial Unicode MS Bold'],
+        'text-size':['interpolate',['linear'],['zoom'],10,11,13,15,15,17],
+        'text-font':['DIN Offc Pro Bold','Arial Unicode MS Bold'],
         'text-anchor':'center',
         'text-max-width':8,
+        'text-allow-overlap':false,
+        'text-ignore-placement':false,
+        'symbol-placement':'point',
       },
       paint:{
-        'text-color':'#c9a84c',
-        'text-halo-color':'rgba(0,0,0,0.7)',
-        'text-halo-width':1.5,
-      }});
+        'text-color':'#ffffff',
+        'text-halo-color':'rgba(0,10,25,0.95)',
+        'text-halo-width':2.5,
+        'text-halo-blur':0.5,
+      },
+      maxzoom: 15.5   // hide labels when zoomed in close to individual lots
+    });
 
   // ── Constraint overlay layers (below lot pins) ────────────
   // Floodplain — blue halo
@@ -730,7 +761,6 @@ function showPermitOnlyPanel(p) {
   function el(id){return document.getElementById(id);}
   el('panel')&&el('panel').classList.add('open');
   el('map')&&el('map').classList.add('panel-open');
-  el('btn3d')&&el('btn3d').classList.remove('visible');
   if(el('pf-tabs'))el('pf-tabs').style.display='none';
   if(el('ph-address'))el('ph-address').textContent=p.address||'—';
   if(el('ph-pid'))el('ph-pid').textContent=p.neighbourhood||p.neighborhood||'';
@@ -744,10 +774,18 @@ function showPermitOnlyPanel(p) {
 // ── Open lot panel ────────────────────────────────────────────
 function openPanel(pid) {
   currentLot=pid; currentPath='strata'; currentData=null;
+  window._pfOverrides = {};
+  window._pfRentalOverrides = {};
+  window._financingScenario = 'cmhc_mli';
+  // Financing pencil-edits (Session B) — cleared on new lot open
+  window._pfFinOverrides = {};
+  // Session 15 — Standardized Design toggle — resets per lot
+  window._useStdDesign = false;
+  // Session 16 — Strata financing scenario ('construction' default or 'all_cash')
+  window._strataFinScenario = 'construction';
   function el(id){return document.getElementById(id);}
   el('panel')&&el('panel').classList.add('open');
   el('map')&&el('map').classList.add('panel-open');
-  el('btn3d')&&el('btn3d').classList.add('visible');
   const emptyEl=el('panel-empty'); if(emptyEl)emptyEl.style.display='none';
   if(el('pf-tabs'))el('pf-tabs').style.display=IS_LOGGED_IN?'flex':'none';
   if(el('ph-address'))el('ph-address').textContent='Loading…';
@@ -777,8 +815,6 @@ function openPanel(pid) {
 function closePanel() {
   document.getElementById('panel').classList.remove('open');
   document.getElementById('map').classList.remove('panel-open');
-  document.getElementById('btn3d').classList.remove('visible');
-  if(is3D)toggle3D();
   clearSelectedLot();
   currentLot=null; currentData=null;
   setTimeout(()=>map.resize(),310);
@@ -790,45 +826,167 @@ function switchTab(tab) {
   document.getElementById(`tab-${tab}`).classList.add('active');
   if(!currentData)return;
   renderPanelBody(currentData,tab);
+  // Update Generate Report button label to reflect tab context
+  const reportBtn = document.querySelector('#panel-actions .w-action-gold');
+  if (reportBtn) {
+    const label = tab === 'compare' ? 'Generate Full Comparison Report' : 'Generate PDF Report';
+    reportBtn.innerHTML = `<i class="fas fa-file-pdf"></i> ${label}`;
+  }
 }
 
 // ── Tool toggles ──────────────────────────────────────────────
 function toolToggle(name) {
-  const filters=['6unit','4unit','duplex'];
-  if(filters.includes(name)&&!toolState[name])
-    filters.forEach(f=>{ if(f!==name){toolState[f]=false;document.getElementById('tgl-'+f).classList.remove('active');} });
-  toolState[name]=!toolState[name];
-  document.getElementById('tgl-'+name).classList.toggle('active',toolState[name]);
+  // Toggle the clicked control
+  toolState[name] = !toolState[name];
+  document.getElementById('tgl-'+name).classList.toggle('active', toolState[name]);
+
+  // Buyout and No Parking are exclusive-view filters — last-one-wins.
+  // Turning one ON automatically turns the other OFF.
+  if (name === 'buyout' && toolState[name] && toolState['nopark']) {
+    toolState['nopark'] = false;
+    document.getElementById('tgl-nopark').classList.remove('active');
+  }
+  if (name === 'nopark' && toolState[name] && toolState['buyout']) {
+    toolState['buyout'] = false;
+    document.getElementById('tgl-buyout').classList.remove('active');
+  }
+
   applyToolState();
 }
 function applyToolState() {
-  if(map.getLayer('transit-halos'))map.setLayoutProperty('transit-halos','visibility',toolState.halos?'visible':'none');
-  if(map.getLayer('skytrain-stops'))map.setLayoutProperty('skytrain-stops','visibility',toolState.skytrain?'visible':'none');
-  if(map.getLayer('skytrain-stops-ring'))map.setLayoutProperty('skytrain-stops-ring','visibility',toolState.skytrain?'visible':'none');
-  if(map.getLayer('permit-pins'))map.setLayoutProperty('permit-pins','visibility',toolState.permits?'visible':'none');
+  // ── Simple visibility toggles ────────────────────────────
+  if(map.getLayer('transit-halos'))        map.setLayoutProperty('transit-halos','visibility',toolState.halos?'visible':'none');
+  if(map.getLayer('skytrain-stops'))       map.setLayoutProperty('skytrain-stops','visibility',toolState.skytrain?'visible':'none');
+  if(map.getLayer('skytrain-stops-ring'))  map.setLayoutProperty('skytrain-stops-ring','visibility',toolState.skytrain?'visible':'none');
+  if(map.getLayer('permit-pins'))          map.setLayoutProperty('permit-pins','visibility',toolState.permits?'visible':'none');
+
   const nbVis = toolState.neighbourhoods ? 'visible' : 'none';
-  if(map.getLayer('neighbourhood-lines'))  map.setLayoutProperty('neighbourhood-lines',  'visibility', nbVis);
-  if(map.getLayer('neighbourhood-labels')) map.setLayoutProperty('neighbourhood-labels', 'visibility', nbVis);
-  const f=['all'];
-  if(toolState['6unit']){f.push(['>=',['get','lot_width_m'],15.1]);f.push(['==',['get','transit_proximate'],1]);f.push(['==',['get','lane_access'],1]);}
-  if(toolState['4unit']){f.push(['>=',['get','lot_width_m'],10.0]);f.push(['<',['get','lot_width_m'],15.1]);f.push(['==',['get','lane_access'],1]);}
-  if(toolState['duplex']){f.push(['>=',['get','lot_width_m'],7.5]);f.push(['<',['get','lot_width_m'],10.0]);f.push(['==',['get','lane_access'],1]);}
-  if(toolState['buyout']){f.push(['>=',['get','lot_width_m'],14.5]);f.push(['<',['get','lot_width_m'],15.1]);f.push(['==',['get','lane_access'],1]);f.push(['==',['get','transit_proximate'],1]);}
-  if(toolState['nopark']){f.push(['==',['get','transit_proximate'],1]);}
-  if(map.getLayer('lot-pins'))map.setFilter('lot-pins',f.length>1?f:null);
-  // Keep heart layer visible even when filters are active —
-  // saved lots should always show their heart regardless of filter state
+  if(map.getLayer('neighbourhood-lines'))   map.setLayoutProperty('neighbourhood-lines','visibility', nbVis);
+  if(map.getLayer('neighbourhood-casing'))  map.setLayoutProperty('neighbourhood-casing','visibility', nbVis);
+  if(map.getLayer('neighbourhood-labels'))  map.setLayoutProperty('neighbourhood-labels','visibility', nbVis);
+
+  // When neighbourhood borders are ON, ensure they sit on top of the pins.
+  // Mapbox render order = layer add order; moveLayer() pushes to the top.
+  if (nbVis === 'visible') {
+    try {
+      if (map.getLayer('neighbourhood-casing')) map.moveLayer('neighbourhood-casing');
+      if (map.getLayer('neighbourhood-lines'))  map.moveLayer('neighbourhood-lines');
+      if (map.getLayer('neighbourhood-labels')) map.moveLayer('neighbourhood-labels');
+    } catch(e) { /* layer order is a nice-to-have, not critical */ }
+  }
+
+  // ── Lot pin filter logic ─────────────────────────────────
+  // Eligibility toggles (6unit/4unit/duplex) are independent show/hide switches.
+  // Buyout and No Parking are exclusive filters — when ON, they hide all
+  // eligibility pins and show only matching lots (last-one-wins).
+  //
+  // Pin color categories (from lot-pins addLayer paint expression):
+  //   • Heritage (any category)                 → dark blue
+  //   • width ≥15.1 + transit + lane            → green (6-unit)
+  //   • width ≥10.0 + lane                      → teal (4-unit)
+  //   • width ≥7.5 + lane                       → amber (duplex/3-unit)
+  //   • everything else                         → gray (below-min)
+  //
+  // We match the same buckets when building the filter, so toggling a
+  // category on/off corresponds exactly to its visible pin color.
+
+  let filterExpr = null;
+
+  if (toolState.buyout) {
+    // Exclusive: show only 14.5m ≤ width < 15.1m + lane + transit
+    filterExpr = ['all',
+      ['>=',['get','lot_width_m'],14.5],
+      ['<', ['get','lot_width_m'],15.1],
+      ['==',['get','lane_access'],1],
+      ['==',['get','transit_proximate'],1]
+    ];
+  } else if (toolState.nopark) {
+    // Exclusive: show only lots within transit walking distance
+    filterExpr = ['==',['get','transit_proximate'],1];
+  } else {
+    // Independent show/hide per eligibility tier.
+    // Build an OR expression of whichever tiers are enabled.
+    // Tier definitions mirror the lot-pins color logic exactly.
+    const tierConditions = [];
+
+    // Below-minimum (gray): always visible (user said keep option C).
+    // Gray = NOT heritage AND NOT (width>=7.5 AND lane)
+    const grayCondition = ['all',
+      ['any',
+        ['==',['get','heritage_category'],'none'],
+        ['==',['get','heritage_category'],null]
+      ],
+      ['any',
+        ['<', ['get','lot_width_m'],7.5],
+        ['==',['get','lane_access'],0]
+      ]
+    ];
+    tierConditions.push(grayCondition);
+
+    // Heritage pins — always visible regardless of eligibility toggles
+    // (they're colored dark blue, not green/teal/amber, so the toggles don't map to them)
+    tierConditions.push(['all',
+      ['!=',['get','heritage_category'],'none'],
+      ['!=',['get','heritage_category'],null]
+    ]);
+
+    if (toolState['6unit']) {
+      // Green tier: width ≥15.1 + transit + lane, NOT heritage
+      tierConditions.push(['all',
+        ['any',
+          ['==',['get','heritage_category'],'none'],
+          ['==',['get','heritage_category'],null]
+        ],
+        ['>=',['get','lot_width_m'],15.1],
+        ['==',['get','transit_proximate'],1],
+        ['==',['get','lane_access'],1]
+      ]);
+    }
+    if (toolState['4unit']) {
+      // Teal tier: width ≥10.0 + lane, excluding 6-unit tier, NOT heritage
+      tierConditions.push(['all',
+        ['any',
+          ['==',['get','heritage_category'],'none'],
+          ['==',['get','heritage_category'],null]
+        ],
+        ['>=',['get','lot_width_m'],10.0],
+        ['==',['get','lane_access'],1],
+        // Exclude lots that already match 6-unit tier
+        ['any',
+          ['<', ['get','lot_width_m'],15.1],
+          ['==',['get','transit_proximate'],0]
+        ]
+      ]);
+    }
+    if (toolState['duplex']) {
+      // Amber tier: width ≥7.5 + lane, excluding 4-unit tier, NOT heritage
+      tierConditions.push(['all',
+        ['any',
+          ['==',['get','heritage_category'],'none'],
+          ['==',['get','heritage_category'],null]
+        ],
+        ['>=',['get','lot_width_m'],7.5],
+        ['<', ['get','lot_width_m'],10.0],
+        ['==',['get','lane_access'],1]
+      ]);
+    }
+
+    // Union of all enabled tiers
+    filterExpr = tierConditions.length > 0 ? ['any'].concat(tierConditions) : null;
+  }
+
+  if(map.getLayer('lot-pins'))map.setFilter('lot-pins', filterExpr);
+
+  // Saved-lot hearts always stay visible regardless of filter state
   if(map.getLayer('saved-lot-hearts'))map.setFilter('saved-lot-hearts',null);
 
-  // Constraint overlay visibility
-  const herVis = toolState.heritage ? 'visible' : 'none';
-  const peatVis = toolState.peat    ? 'visible' : 'none';
-
-  if(map.getLayer('heritage-ring'))  map.setLayoutProperty('heritage-ring',  'visibility', herVis);
-  if(map.getLayer('peat-overlay'))   map.setLayoutProperty('peat-overlay',   'visibility', peatVis);
-  const floodVis = toolState.flood ? 'visible' : 'none';
-  if(map.getLayer('flood-overlay'))  map.setLayoutProperty('flood-overlay',  'visibility', floodVis);
-
+  // ── Constraint overlays ──────────────────────────────────
+  const herVis   = toolState.heritage ? 'visible' : 'none';
+  const peatVis  = toolState.peat     ? 'visible' : 'none';
+  const floodVis = toolState.flood    ? 'visible' : 'none';
+  if(map.getLayer('heritage-ring'))  map.setLayoutProperty('heritage-ring','visibility', herVis);
+  if(map.getLayer('peat-overlay'))   map.setLayoutProperty('peat-overlay','visibility',  peatVis);
+  if(map.getLayer('flood-overlay'))  map.setLayoutProperty('flood-overlay','visibility', floodVis);
 }
 
 // ── Draggable tool menu ───────────────────────────────────────
@@ -853,7 +1011,7 @@ function renderGate1(d) {
   document.getElementById('panel-body').innerHTML=`
     <div class="w-section"><div class="w-section-title">Property Details</div><div class="w-specs">
       <div class="w-spec"><div class="w-spec-label">Width</div><div class="w-spec-val">${(d.lot_width_m/0.3048).toFixed(1)} ft</div><div class="w-spec-sub">${d.lot_width_m}m</div></div>
-      <div class="w-spec"><div class="w-spec-label">Area</div><div class="w-spec-val">${d.lot_area_sqm}m²</div><div class="w-spec-sub">${Math.round(d.lot_area_sqm*10.7639)} sqft</div></div>
+      <div class="w-spec"><div class="w-spec-label">Area</div><div class="w-spec-val">${Math.round(d.lot_area_sqm*10.7639).toLocaleString()} sf</div><div class="w-spec-sub">${d.lot_area_sqm}m²</div></div>
       <div class="w-spec"><div class="w-spec-label">Lane</div><div class="w-spec-val">${d.lane_access?'✓ Yes':'✗ No'}</div></div>
       <div class="w-spec"><div class="w-spec-label">Transit</div><div class="w-spec-val">${d.transit_proximate?'✓ Yes':'✗ No'}</div></div>
     </div></div>
@@ -886,8 +1044,9 @@ function renderPanel(d,tab) {
   renderPanelBody(d,tab);
   const actions=document.getElementById('panel-actions');
   actions.style.display='flex';
+  const reportBtnLabel = tab === 'compare' ? 'Generate Full Comparison Report' : 'Generate PDF Report';
   actions.innerHTML=`
-    <button class="w-action-btn w-action-gold" onclick="window.open('/generate-report.php?pid=${d.property.pid}&path='+currentPath,'_blank')"><i class="fas fa-file-pdf"></i> Generate PDF Report</button>
+    <button class="w-action-btn w-action-gold" onclick="openReport('${d.property.pid}')"><i class="fas fa-file-pdf"></i> ${reportBtnLabel}</button>
     <button class="w-action-btn w-action-primary" onclick="inquireAcquisition('${d.property.pid}','${escHtml(d.property.address)}')"><i class="fas fa-handshake"></i> Inquire for Acquisition</button>
     <button class="w-action-btn w-action-secondary" id="save-lot-btn" onclick="saveLot('${d.property.pid}')"><i class="far fa-heart"></i> Save Lot</button>`;
   updateSaveButton(d.property.pid);
@@ -897,123 +1056,587 @@ function renderPanelBody(d,tab) {
   const body=document.getElementById('panel-body');
   if(tab==='strata')body.innerHTML=renderStrataTab(d);
   else if(tab==='rental')body.innerHTML=renderRentalTab(d);
-  else if(tab==='outlook')body.innerHTML=renderOutlookTab(d);
+  else if(tab==='compare')body.innerHTML=renderCompareTab(d);
 }
 
 function renderStrataTab(d) {
-  const p=d.property,e=d.eligibility,s=d.strata,dom=d.dom;
-  const warn149=e.warning_149m?`<div class="w-warning-149 w-section"><i class="fas fa-exclamation-triangle"></i><span><strong>0.2m from 6-unit eligibility.</strong> Neighbour buyout may unlock significantly higher exit value.</span></div>`:'';
+  const p=d.property, e=d.eligibility, s=d.strata, dom=d.dom, md=d.market_data||{};
+
+  // ── Overrides (land cost and build $/sqft) ──────────────────────────────────
+  if (!window._pfOverrides) window._pfOverrides = {};
+  const origBuildPsf = s.buildable_sqft > 0 ? (s.build_cost / s.buildable_sqft) : 420;
+  const landVal      = window._pfOverrides.land  != null ? window._pfOverrides.land  : s.land_cost;
+  const buildPsf     = window._pfOverrides.build != null ? window._pfOverrides.build : origBuildPsf;
+
+  // ── Construction Financing overrides (Session NEW) ──────────────────────────
+  // Stored as whole numbers (65, 7, 15) in _pfOverrides.cfin_*, converted to fractions at calc time
+  const cfinLtcPct   = window._pfOverrides.cfin_ltc  != null ? window._pfOverrides.cfin_ltc  : 65;
+  const cfinRatePct  = window._pfOverrides.cfin_rate != null ? window._pfOverrides.cfin_rate : 7;
+  const cfinTermMo   = window._pfOverrides.cfin_term != null ? window._pfOverrides.cfin_term : 15;
+  const cfinEdited   = window._pfOverrides.cfin_ltc != null || window._pfOverrides.cfin_rate != null || window._pfOverrides.cfin_term != null;
+
+  // Session 16 — Strata financing scenario (Construction Financing vs All Cash)
+  const strataFinScenario = window._strataFinScenario || 'construction';
+  const isAllCashStrata   = strataFinScenario === 'all_cash';
+
+  const isEdited     = window._pfOverrides.land  != null || window._pfOverrides.build != null || cfinEdited || isAllCashStrata;
+
+  // ── HPI selection ───────────────────────────────────────────────────────────
+  const useDetached    = window._pfOverrides.useDetached === true;
+  const dupPsf         = md.avg_sold_psf   || 985;
+  const detPsf         = md.detached_benchmark ? md.detached_benchmark.avg_psf : null;
+  const activePsf      = (useDetached && detPsf) ? detPsf : dupPsf;
+
+  // ── Session 15 — Standardized Design credit ($35k saved on soft costs) ─────
+  const useStd = window._useStdDesign === true;
+  const stdCredit = useStd ? 35000 : 0;
+
+  // ── Recalculate with overrides — city fees always fixed ────────────────────
+  const hardBuild  = s.buildable_sqft * buildPsf;
+  const fixedFees  = s.dcl_city_wide + s.dcl_utilities + (s.metro_dcc||0) + s.permit_fees;
+  const costBeforeFin = landVal + hardBuild + fixedFees + s.contingency - stdCredit;
+
+  // Construction financing cost: (Land + Build + Fees) × LTC × Rate × (Term/12) / 2
+  // /2 = average outstanding balance during draw (interest-only convention)
+  // Session 16: all-cash skips the calc → no debt, no financing cost
+  const cfinCost   = isAllCashStrata
+    ? 0
+    : costBeforeFin * (cfinLtcPct/100) * (cfinRatePct/100) * (cfinTermMo/12) * 0.5;
+
+  const totalCost  = costBeforeFin + cfinCost;
+  const exitVal    = s.saleable_sqft * activePsf;
+  const profit     = exitVal - totalCost;
+  const roi        = totalCost > 0 ? (profit / totalCost * 100) : 0;
+
+  const warn149 = e.warning_149m
+    ? `<div class="w-warning-149 w-section"><i class="fas fa-exclamation-triangle"></i><span><strong>0.2m from 6-unit eligibility.</strong> Neighbour buyout may unlock significantly higher exit value.</span></div>`
+    : '';
+
   return `${warn149}${buildFlags(p)}
     <div class="w-section"><div class="w-section-title">Property Details</div><div class="w-specs">
       <div class="w-spec"><div class="w-spec-label">Width</div><div class="w-spec-val">${p.lot_width_ft} ft</div><div class="w-spec-sub">${p.lot_width_m}m</div></div>
-      <div class="w-spec"><div class="w-spec-label">Area</div><div class="w-spec-val">${p.lot_area_sqm}m²</div><div class="w-spec-sub">${p.lot_area_sqft} sqft</div></div>
+      <div class="w-spec"><div class="w-spec-label">Area</div><div class="w-spec-val">${Number(p.lot_area_sqft).toLocaleString()} sf</div><div class="w-spec-sub">${p.lot_area_sqm}m²</div></div>
       <div class="w-spec"><div class="w-spec-label">FSR (Strata)</div><div class="w-spec-val">0.70</div></div>
       <div class="w-spec"><div class="w-spec-label">Buildable</div><div class="w-spec-val">${Math.round(s.buildable_sqft).toLocaleString()} sf</div></div>
       <div class="w-spec"><div class="w-spec-label">Saleable</div><div class="w-spec-val">${Math.round(s.saleable_sqft).toLocaleString()} sf</div></div>
       <div class="w-spec"><div class="w-spec-label">Parking</div><div class="w-spec-val">${e.parking_req===0?'None ✓':e.parking_req+' stalls'}</div></div>
     </div></div>
-    <div class="w-section"><div class="w-section-title">Strata Pro Forma</div>
-      <div class="w-pf-row"><span>Land Cost</span><span class="w-pf-val">${fmt(s.land_cost)}</span></div>
-      <div class="w-pf-row"><span>Build Cost</span><span class="w-pf-val">${fmt(s.build_cost)}</span></div>
-      <div class="w-pf-row"><span>DCL + Permit Fees</span><span class="w-pf-val">${fmt(s.dcl_city_wide+s.dcl_utilities+s.permit_fees)}</span></div>
-      ${s.contingency>0?`<div class="w-pf-row"><span>Peat Contingency</span><span class="w-pf-val" style="color:var(--amber)">${fmt(s.contingency)}</span></div>`:''}
-      <div class="w-pf-row total"><span>Total Project Cost</span><span class="w-pf-val">${fmt(s.total_project_cost)}</span></div>
-      <div class="w-pf-row" style="margin-top:8px"><span>Avg sold / sqft</span><span class="w-pf-val" style="color:#777;font-size:12px">${d.market_data&&d.market_data.avg_sold_psf?'$'+Math.round(d.market_data.avg_sold_psf).toLocaleString()+'/sqft'+(d.market_data.using_fallback?' <span style="color:#bbb;font-size:10px">(fallback)</span>':''): '—'}</span></div>
-      <div class="w-pf-row" style="margin-top:8px"><span>Exit Value</span><span class="w-pf-val">${fmt(s.exit_value)}</span></div>
-      <div class="w-profit-box">
-        <div class="w-profit-item"><div class="w-profit-label">Profit</div><div class="w-profit-val ${s.profit<0?'negative':''}">${fmt(s.profit)}</div></div>
-        <div class="w-profit-item"><div class="w-profit-label">ROI</div><div class="w-profit-val ${s.roi_pct<0?'negative':''}">${s.roi_pct.toFixed(1)}%</div></div>
+
+    <div class="w-section">
+      <div class="w-section-title">Strata Pro Forma ${isEdited?'<span style="font-size:10px;color:var(--amber);font-weight:600;margin-left:6px">✎ Adjusted</span>':''}</div>
+
+      <div class="w-pf-row"><span>Land Cost</span>
+        <div class="w-pf-edit-wrap">
+          <span class="w-pf-val" id="pf-land-display">${fmt(landVal)}</span>
+          <input class="w-pf-edit-input" id="pf-land-input" type="text" value="${Math.round(landVal).toLocaleString()}" style="display:none" onblur="pfCommit('land')" onkeydown="if(event.key==='Enter')pfCommit('land')">
+          <button class="w-pf-edit-btn" id="pf-land-btn" onclick="pfToggle('land')" title="Adjust acquisition price"><i class="fas fa-pencil-alt"></i></button>
+        </div>
       </div>
+      <div class="w-pf-sub">BC Assessment: ${fmt(s.land_cost)}${window._pfOverrides.land!=null?' · <span style="color:var(--amber)">Using adjusted price</span>':''}</div>
+
+      <div class="w-pf-row"><span>Build Cost</span>
+        <div class="w-pf-edit-wrap">
+          <span class="w-pf-val" id="pf-build-display">${fmt(hardBuild)}</span>
+          <input class="w-pf-edit-input" id="pf-build-input" type="text" value="${Math.round(buildPsf)}" style="display:none" onblur="pfCommit('build')" onkeydown="if(event.key==='Enter')pfCommit('build')">
+          <button class="w-pf-edit-btn" id="pf-build-btn" onclick="pfToggle('build')" title="Adjust $/sqft"><i class="fas fa-pencil-alt"></i></button>
+        </div>
+      </div>
+      <div class="w-pf-sub">$${Math.round(buildPsf).toLocaleString()}/sqft × ${Math.round(s.buildable_sqft).toLocaleString()} sqft${window._pfOverrides.build!=null?' · <span style="color:var(--amber)">Using adjusted rate</span>':''}</div>
+
+      <div class="w-pf-row"><span>DCL + Metro DCC + Permit</span><span class="w-pf-val">${fmt(fixedFees)}</span></div>
+      <div class="w-pf-sub">City fees — fixed</div>
+      ${s.contingency>0?`<div class="w-pf-row"><span>Peat Contingency</span><span class="w-pf-val" style="color:var(--amber)">${fmt(s.contingency)}</span></div>`:''}
+
+      <label class="w-stddesign">
+        <input type="checkbox" ${useStd?'checked':''} onchange="toggleStdDesign(this.checked)">
+        <div class="w-stddesign-body">
+          <div class="w-stddesign-title">BC Standardized Design adopted</div>
+          Skip custom architectural drawings — use a BC Provincial or CMHC pre-approved multiplex design. <span class="w-stddesign-credit">Credit: −$35,000</span>
+        </div>
+      </label>
+      ${useStd?`<div class="w-pf-row"><span>Standardized design credit</span><span class="w-pf-val" style="color:#166534">−${fmt(stdCredit)}</span></div>`:''}
+
+      ${isAllCashStrata
+        ? `<div class="w-pf-row"><span>Construction Financing — All Cash</span><span class="w-pf-val">$0</span></div>
+           <div class="w-pf-sub" style="color:#166534">No construction debt — project fully equity-funded.</div>`
+        : `<div class="w-pf-row"><span>Construction Financing</span><span class="w-pf-val">${fmt(cfinCost)}</span></div>
+           <div class="w-pf-sub">Editable below · ${cfinEdited?'<span style="color:var(--amber)">Adjusted</span>':'default assumption'}</div>`
+      }
+
+      <div class="w-pf-row total"><span>Total Project Cost</span><span class="w-pf-val">${fmt(totalCost)}</span></div>
+
+      <div style="border-top:1px solid rgba(0,0,0,.07);margin:10px 0 6px"></div>
+
+      <div class="w-hpi-row ${!useDetached?'active':'muted'}">
+        <span class="w-hpi-label">New Duplex Only HPI</span>
+        <span class="w-hpi-val">$${Math.round(dupPsf).toLocaleString()}/sqft${md.using_fallback?' <span style="color:#ccc;font-size:10px">(fallback)</span>':''}</span>
+      </div>
+
+      <div class="w-hpi-row ${useDetached?'active':''}">
+        <span class="w-hpi-label">New Detached HPI</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="w-hpi-val">${detPsf?'$'+Math.round(detPsf).toLocaleString()+'/sqft':'<span style="color:#ccc;font-size:10px">No data</span>'}</span>
+          ${detPsf?`<label class="w-toggle" title="Use Detached HPI for exit value">
+            <input type="checkbox" ${useDetached?'checked':''} onchange="pfToggleDetached(this.checked)">
+            <span class="w-toggle-slider"></span>
+          </label>`:''}
+        </div>
+      </div>
+      ${useDetached?`<div class="w-exit-note">Exit value using New Detached HPI</div>`:''}
+
+      <div class="w-pf-row" style="margin-top:6px"><span>Exit Value</span><span class="w-pf-val">${fmt(exitVal)}</span></div>
+      <div class="w-profit-box">
+        <div class="w-profit-item"><div class="w-profit-label">Profit</div><div class="w-profit-val ${profit<0?'negative':''}">${fmt(profit)}</div></div>
+        <div class="w-profit-item"><div class="w-profit-label">ROI</div><div class="w-profit-val ${roi<0?'negative':''}">${roi.toFixed(1)}%</div></div>
+      </div>
+      ${isEdited?`<div style="text-align:center;margin-top:8px"><button onclick="pfReset()" style="background:none;border:none;color:#bbb;font-size:11px;cursor:pointer;text-decoration:underline">Reset to original values</button></div>`:''}
     </div>
+
+    <div class="w-section">
+      <div class="w-section-title">Financing Path</div>
+      <select id="strata-fin-scenario-dd" onchange="changeStrataFinScenario(this.value)"
+              style="width:100%;padding:10px 12px;border:1px solid #d4d4d4;border-radius:6px;font-size:13px;background:#fff;color:#002446;font-weight:600;cursor:pointer;font-family:inherit">
+        <option value="construction" ${!isAllCashStrata?'selected':''}>Construction Financing</option>
+        <option value="all_cash"     ${ isAllCashStrata?'selected':''}>All Cash</option>
+      </select>
+      <div style="font-size:10px;color:#999;margin-top:6px;font-style:italic">Select All Cash to model a project with no construction debt.</div>
+    </div>
+
+    ${isAllCashStrata ? `
+    <div class="w-section">
+      <div class="w-section-title">Construction Financing — All Cash</div>
+      <div class="w-pf-row"><span>Financing Cost</span><span class="w-pf-val">$0</span></div>
+      <div style="font-size:11px;color:#666;margin-top:8px;line-height:1.5;font-style:italic">No construction debt — project fully equity-funded. In practice, most builders use land + construction financing; selecting All Cash isolates the impact of carrying cost on ROI.</div>
+    </div>
+    ` : `
+    <div class="w-section">
+      <div class="w-section-title">Construction Financing ${cfinEdited?'<span style="font-size:10px;color:var(--amber);font-weight:600;margin-left:6px">✎ Adjusted</span>':''}</div>
+      <div class="w-pf-row"><span>Loan-to-cost (LTC)</span>
+        <div class="w-pf-edit-wrap">
+          <span class="w-pf-val" id="pf-cfin-ltc-display">${cfinLtcPct}%</span>
+          <input class="w-pf-edit-input" id="pf-cfin-ltc-input" type="text" value="${cfinLtcPct}" style="display:none" onblur="pfCfinCommit('ltc')" onkeydown="if(event.key==='Enter')pfCfinCommit('ltc')">
+          <button class="w-pf-edit-btn" id="pf-cfin-ltc-btn" onclick="pfCfinToggle('ltc')" title="Adjust loan-to-cost"><i class="fas fa-pencil-alt"></i></button>
+        </div>
+      </div>
+      <div class="w-pf-row"><span>Interest rate</span>
+        <div class="w-pf-edit-wrap">
+          <span class="w-pf-val" id="pf-cfin-rate-display">${cfinRatePct}%</span>
+          <input class="w-pf-edit-input" id="pf-cfin-rate-input" type="text" value="${cfinRatePct}" style="display:none" onblur="pfCfinCommit('rate')" onkeydown="if(event.key==='Enter')pfCfinCommit('rate')">
+          <button class="w-pf-edit-btn" id="pf-cfin-rate-btn" onclick="pfCfinToggle('rate')" title="Adjust interest rate"><i class="fas fa-pencil-alt"></i></button>
+        </div>
+      </div>
+      <div class="w-pf-row"><span>Term (months)</span>
+        <div class="w-pf-edit-wrap">
+          <span class="w-pf-val" id="pf-cfin-term-display">${cfinTermMo} mo</span>
+          <input class="w-pf-edit-input" id="pf-cfin-term-input" type="text" value="${cfinTermMo}" style="display:none" onblur="pfCfinCommit('term')" onkeydown="if(event.key==='Enter')pfCfinCommit('term')">
+          <button class="w-pf-edit-btn" id="pf-cfin-term-btn" onclick="pfCfinToggle('term')" title="Adjust construction term"><i class="fas fa-pencil-alt"></i></button>
+        </div>
+      </div>
+      <div class="w-pf-row total"><span>Financing Cost</span><span class="w-pf-val">${fmt(cfinCost)}</span></div>
+    </div>
+    `}
+
     <div class="w-section"><div class="w-section-title">Market Velocity</div>
       <div class="w-dom-row"><span class="w-dom-arrow ${dom.colour}">${dom.arrow}</span><span class="w-pf-val">${dom.duplex_current} days</span><span class="w-dom-label">${dom.label}</span></div>
       ${p.neighbourhood?`<div style="font-size:11px;color:#aaa;margin-top:4px">${p.neighbourhood}</div>`:''}
-    </div>
-    ${d.design?renderDesign(d.design):''}`;
+    </div>`;
 }
 
 function renderRentalTab(d) {
   const r=d.rental;
+  const p=d.property;
+  const fin=r.financing||{};
+  const cf=r.cash_flow||{};
+  const proj=cf.projections||{};
+
+  // ── Rental overrides (independent from strata) ──────────────────────────────
+  if (!window._pfRentalOverrides) window._pfRentalOverrides = {};
+
+  // Derive original build $/sqft from total_build_cost (excludes density bonus) / total_buildable
+  // total_build_cost = base_build_cost + density_bonus_cost
+  // base_build_cost = total_buildable_sqft * build_psf
+  const origBuildPsf = r.total_buildable_sqft > 0
+    ? ((r.base_build_cost || (r.total_build_cost - (r.density_bonus_cost||0))) / r.total_buildable_sqft)
+    : 420;
+
+  const landVal   = window._pfRentalOverrides.land  != null ? window._pfRentalOverrides.land  : r.land_cost;
+  const buildPsf  = window._pfRentalOverrides.build != null ? window._pfRentalOverrides.build : origBuildPsf;
+  const isEdited  = window._pfRentalOverrides.land != null || window._pfRentalOverrides.build != null;
+
+  // ── Session 15 — Standardized Design credit ($35k saved on soft costs) ─────
+  const useStd = window._useStdDesign === true;
+  const stdCredit = useStd ? 35000 : 0;
+
+  // ── Recalculate with overrides ──────────────────────────────────────────────
+  // Keep density bonus, fees, contingency as-is from server response (unaffected by land/build edits)
+  const baseBuild   = r.total_buildable_sqft * buildPsf;
+  const totalBuild  = baseBuild + (r.density_bonus_cost || 0);
+  const totalCost   = landVal + totalBuild + r.total_fees + r.contingency - stdCredit;
+
+  // Recalculate cap rate + stabilized value with new total cost
+  // NOI stays the same (rents haven't changed)
+  const capRate         = totalCost > 0 ? (r.annual_noi / totalCost) * 100 : 0;
+  const marketCap       = r.market_cap_rate || 0.04;
+  const stabilizedValue = marketCap > 0 ? r.annual_noi / marketCap : 0;
+  const valueCreated    = stabilizedValue - totalCost;
+
+  // Rent rows (with subtle fallback indicator)
+  const fb = r.fallback_used || {};
   const rentRows=['1br','2br','3br'].map(type=>{
     const rb=r.rent_breakdown[type]; if(!rb||rb.unit_count===0)return '';
     const dotColor=rb.variance_colour==='green'?'#22c55e':rb.variance_colour==='amber'?'#f59e0b':'#94a3b8';
-    return `<tr><td>${rb.unit_count}× ${type.toUpperCase()}</td><td>${fmtK(rb.market_rent)}/mo</td><td><span class="w-rent-dot" style="background:${dotColor}"></span>${rb.variance_pct>0?'+':''}${rb.variance_pct.toFixed(0)}% vs CMHC</td></tr>`;
+    const fbMark = fb[type] ? ' <span style="font-size:9px;color:#bbb" title="Limited source data">◇</span>' : '';
+    return `<tr><td>${rb.unit_count}× ${type.toUpperCase()}${fbMark}</td><td>${fmtK(rb.market_rent)}/mo</td><td><span class="w-rent-dot" style="background:${dotColor}"></span>${rb.variance_pct>0?'+':''}${rb.variance_pct.toFixed(0)}% vs CMHC</td></tr>`;
   }).join('');
-  return `<div class="w-section"><div class="w-section-title">Secured Rental Pro Forma (1.00 FSR)</div>
-      <div class="w-pf-row"><span>Land Cost</span><span class="w-pf-val">${fmt(r.land_cost)}</span></div>
-      <div class="w-pf-row"><span>Build Cost</span><span class="w-pf-val">${fmt(r.total_build_cost)}</span></div>
-      <div class="w-pf-row"><span>DCL + Permit Fees</span><span class="w-pf-val">${fmt(r.total_fees)}</span></div>
-      ${r.contingency>0?`<div class="w-pf-row"><span>Peat Contingency</span><span class="w-pf-val" style="color:var(--amber)">${fmt(r.contingency)}</span></div>`:''}
-      <div class="w-pf-row total"><span>Total Project Cost</span><span class="w-pf-val">${fmt(r.total_project_cost)}</span></div>
+
+ // Year 1 / 5 / 10 projection rows (Session B: pencil-edit aware)
+  // If user edited financing terms, swap in recalculated annual debt service.
+  // Rent growth and opex growth stay as server-returned (not user-editable).
+  const finOvCf = window._pfFinOverrides || {};
+  const finCfEdited = finOvCf.ltc != null || finOvCf.rate != null || finOvCf.amort != null;
+  let adjY1 = proj.year_1, adjY5 = proj.year_5, adjY10 = proj.year_10;
+
+  if (finCfEdited && !fin.is_all_cash && fin.equity_required) {
+    const uLtc2   = finOvCf.ltc   != null ? finOvCf.ltc   : fin.ltc_pct;
+    const uRate2  = finOvCf.rate  != null ? finOvCf.rate  : fin.interest_rate_pct;
+    const uAmort2 = finOvCf.amort != null ? finOvCf.amort : fin.amort_years;
+    const insPf   = (fin.scenario_key==='cmhc_mli') ? ((fin.insurance_prem_pct||0)/100) : 0;
+    const tpc     = fin.ltc_pct > 0 ? (fin.equity_required / (1 - fin.ltc_pct/100)) : 0;
+    const lb      = tpc * (uLtc2/100);
+    const lt      = lb * (1 + insPf);
+    const mr2     = (uRate2/100) / 12;
+    const np2     = uAmort2 * 12;
+    let mp2 = 0;
+    if (lt > 0 && np2 > 0) {
+      mp2 = (mr2 > 0)
+        ? lt * (mr2 * Math.pow(1+mr2, np2)) / (Math.pow(1+mr2, np2) - 1)
+        : lt / np2;
+    }
+    const newAnnualDebt = mp2 * 12;
+    // Swap debt service + recalc cash flow per year; NOI is unchanged
+    const swap = (p) => p ? { ...p, debt_service: newAnnualDebt, cash_flow: p.noi - newAnnualDebt } : p;
+    adjY1  = swap(proj.year_1);
+    adjY5  = swap(proj.year_5);
+    adjY10 = swap(proj.year_10);
+  }
+
+  const y1 = adjY1, y5 = adjY5, y10 = adjY10;
+  const ytp=cf.year_to_positive;
+
+  const cfRow = (yr, p) => {
+    if (!p) return '';
+    const cfColor = p.cash_flow >= 0 ? 'var(--green,#22c55e)' : '#dc2626';
+    const cfSign  = p.cash_flow < 0 ? '–' : '';
+    return `<tr>
+      <td style="font-weight:600">Year ${yr}</td>
+      <td style="text-align:right;color:#666">${fmt(p.noi)}</td>
+      <td style="text-align:right;color:#666">–${fmt(p.debt_service)}</td>
+      <td style="text-align:right;font-weight:700;color:${cfColor}">${cfSign}${fmt(Math.abs(p.cash_flow))}</td>
+    </tr>`;
+  };
+
+  // Headline metric colors
+  const yieldColor = capRate >= (marketCap * 100) ? 'var(--green,#22c55e)' : 'var(--amber,#f59e0b)';
+  const valueColor = valueCreated >= 0 ? 'var(--green,#22c55e)' : '#dc2626';
+
+  return `<div class="w-section"><div class="w-section-title">Hold Metrics</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+        <div style="background:#f9f6f0;padding:10px;border-radius:6px">
+          <div style="font-size:10px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Yield on Cost</div>
+          <div style="font-size:20px;font-weight:800;color:${yieldColor}">${capRate.toFixed(2)}%</div>
+          <div style="font-size:10px;color:#999;margin-top:2px">vs ${(marketCap*100).toFixed(1)}% market cap</div>
+        </div>
+        <div style="background:#f9f6f0;padding:10px;border-radius:6px">
+          <div style="font-size:10px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Stabilized Value</div>
+          <div style="font-size:20px;font-weight:800;color:var(--navy,#002446)">${fmt(stabilizedValue)}</div>
+        </div>
+        <div style="background:#f9f6f0;padding:10px;border-radius:6px">
+          <div style="font-size:10px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Value Created</div>
+          <div style="font-size:20px;font-weight:800;color:${valueColor}">${valueCreated>=0?'+':''}${fmt(valueCreated)}</div>
+        </div>
+      </div>
     </div>
+
+    <div class="w-section"><div class="w-section-title">Hold-Through Projection</div>
+      <table style="width:100%;font-size:12px;border-collapse:collapse">
+        <thead>
+          <tr style="color:#666;text-transform:uppercase;letter-spacing:.05em;font-size:10px">
+            <th style="text-align:left;padding:6px 0;border-bottom:1px solid rgba(0,0,0,0.1)">&nbsp;</th>
+            <th style="text-align:right;padding:6px 0;border-bottom:1px solid rgba(0,0,0,0.1)">NOI</th>
+            <th style="text-align:right;padding:6px 0;border-bottom:1px solid rgba(0,0,0,0.1)">Debt</th>
+            <th style="text-align:right;padding:6px 0;border-bottom:1px solid rgba(0,0,0,0.1)">Cash Flow</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${cfRow(1,y1)}${cfRow(5,y5)}${cfRow(10,y10)}
+        </tbody>
+      </table>
+      ${ytp?`<div style="font-size:10px;color:#999;margin-top:8px">Project cash-flow positive by <strong style="color:var(--green,#22c55e)">Year ${ytp}</strong>.</div>`:''}
+    </div>
+
+    <div class="w-section">
+      <div class="w-section-title">Rental Pro Forma (1.00 FSR) ${isEdited?'<span style="font-size:10px;color:var(--amber);font-weight:600;margin-left:6px">✎ Adjusted</span>':''}</div>
+
+      <div class="w-pf-row"><span>Land Cost</span>
+        <div class="w-pf-edit-wrap">
+          <span class="w-pf-val" id="pfr-land-display">${fmt(landVal)}</span>
+          <input class="w-pf-edit-input" id="pfr-land-input" type="text" value="${Math.round(landVal).toLocaleString()}" style="display:none" onblur="pfRentalCommit('land')" onkeydown="if(event.key==='Enter')pfRentalCommit('land')">
+          <button class="w-pf-edit-btn" id="pfr-land-btn" onclick="pfRentalToggle('land')" title="Adjust acquisition price"><i class="fas fa-pencil-alt"></i></button>
+        </div>
+      </div>
+      <div class="w-pf-sub">BC Assessment: ${fmt(r.land_cost)}${window._pfRentalOverrides.land!=null?' · <span style="color:var(--amber)">Using adjusted price</span>':''}</div>
+
+      <div class="w-pf-row"><span>Build Cost</span>
+        <div class="w-pf-edit-wrap">
+          <span class="w-pf-val" id="pfr-build-display">${fmt(totalBuild)}</span>
+          <input class="w-pf-edit-input" id="pfr-build-input" type="text" value="${Math.round(buildPsf)}" style="display:none" onblur="pfRentalCommit('build')" onkeydown="if(event.key==='Enter')pfRentalCommit('build')">
+          <button class="w-pf-edit-btn" id="pfr-build-btn" onclick="pfRentalToggle('build')" title="Adjust $/sqft"><i class="fas fa-pencil-alt"></i></button>
+        </div>
+      </div>
+      <div class="w-pf-sub">$${Math.round(buildPsf).toLocaleString()}/sqft × ${Math.round(r.total_buildable_sqft).toLocaleString()} sqft + density bonus ${window._pfRentalOverrides.build!=null?' · <span style="color:var(--amber)">Adjusted</span>':''}</div>
+
+      <div class="w-pf-row"><span>DCL + Metro DCC + Permit</span><span class="w-pf-val">${fmt(r.total_fees)}</span></div>
+      <div class="w-pf-sub">City fees — fixed</div>
+      ${r.contingency>0?`<div class="w-pf-row"><span>Peat Contingency</span><span class="w-pf-val" style="color:var(--amber)">${fmt(r.contingency)}</span></div>`:''}
+
+      <label class="w-stddesign">
+        <input type="checkbox" ${useStd?'checked':''} onchange="toggleStdDesign(this.checked)">
+        <div class="w-stddesign-body">
+          <div class="w-stddesign-title">BC Standardized Design adopted</div>
+          Skip custom architectural drawings — use a BC Provincial or CMHC pre-approved multiplex design. <span class="w-stddesign-credit">Credit: −$35,000</span>
+        </div>
+      </label>
+      ${useStd?`<div class="w-pf-row"><span>Standardized design credit</span><span class="w-pf-val" style="color:#166534">−${fmt(stdCredit)}</span></div>`:''}
+
+      <div class="w-pf-row total"><span>Total Project Cost</span><span class="w-pf-val">${fmt(totalCost)}</span></div>
+
+      ${isEdited?`<div style="text-align:center;margin-top:8px"><button onclick="pfRentalReset()" style="background:none;border:none;color:#bbb;font-size:11px;cursor:pointer;text-decoration:underline">Reset to original values</button></div>`:''}
+    </div>
+
     <div class="w-section"><div class="w-section-title">Rental Income</div>
       <table class="w-rent-table"><thead><tr><th>Mix</th><th>Market Rent</th><th>vs CMHC</th></tr></thead><tbody>${rentRows}</tbody></table>
       <div style="margin-top:10px">
         <div class="w-pf-row"><span>Gross Monthly</span><span class="w-pf-val">${fmtK(r.gross_monthly)}/mo</span></div>
         <div class="w-pf-row"><span>Annual Gross</span><span class="w-pf-val">${fmt(r.annual_gross)}</span></div>
         <div class="w-pf-row"><span>Vacancy (${(r.vacancy_rate*100).toFixed(0)}%)</span><span class="w-pf-val" style="color:var(--amber)">–${fmt(r.annual_gross-r.effective_gross)}</span></div>
-        <div class="w-pf-row"><span>Operating Expenses (${(r.operating_expense_rate*100).toFixed(0)}%)</span><span class="w-pf-val" style="color:var(--amber)">–${fmt(r.effective_gross-r.annual_noi)}</span></div>
+        <div class="w-pf-row"><span>Operating Expenses (${(r.operating_expense_rate*100).toFixed(0)}%)</span><span class="w-pf-val" style="color:var(--amber)">–${fmt(r.opex_amount||r.effective_gross-r.annual_noi)}</span></div>
         <div class="w-pf-row total"><span>Net Operating Income</span><span class="w-pf-val positive">${fmt(r.annual_noi)}</span></div>
       </div>
     </div>
-    <div class="w-section"><div class="w-section-title">Hold Analysis</div>
-      <div class="w-pf-row"><span>Cap Rate</span><span class="w-pf-val">${r.total_project_cost>0?((r.annual_noi/r.total_project_cost)*100).toFixed(2):'—'}%</span></div>
+
+    ${(() => {
+      const scenarioKey    = fin.scenario_key   || 'cmhc_mli';
+      const scenarioLabel  = fin.scenario_label || 'CMHC MLI Select';
+      const isAllCash      = fin.is_all_cash    === true;
+      const needsCovenant  = fin.requires_covenant === true;
+
+      // Dropdown is always visible
+      const dropdown = `
+        <div class="w-section">
+          <div class="w-section-title">Financing Path</div>
+          <select id="financing-scenario-dd" onchange="changeFinancingScenario(this.value)"
+                  style="width:100%;padding:10px 12px;border:1px solid #d4d4d4;border-radius:6px;font-size:13px;background:#fff;color:#002446;font-weight:600;cursor:pointer;font-family:inherit">
+            <option value="cmhc_mli"     ${scenarioKey==='cmhc_mli'    ?'selected':''}>CMHC MLI Select</option>
+            <option value="conventional" ${scenarioKey==='conventional'?'selected':''}>Conventional Rental</option>
+            <option value="private"      ${scenarioKey==='private'     ?'selected':''}>Private / B-Lender</option>
+            <option value="all_cash"     ${scenarioKey==='all_cash'    ?'selected':''}>All Cash</option>
+          </select>
+          <div style="font-size:10px;color:#999;margin-top:6px;font-style:italic">Switching paths resets financing edits to this scenario's defaults.</div>
+        </div>`;
+
+      // All-Cash short-circuit: no debt to edit
+      if (isAllCash) {
+        return dropdown + `
+        <div class="w-section">
+          <div class="w-section-title">${scenarioLabel}</div>
+          <div class="w-pf-row"><span>Equity Required (100%)</span><span class="w-pf-val" style="font-weight:700">${fmt(fin.equity_required)}</span></div>
+          <div style="font-size:11px;color:#666;margin-top:8px;line-height:1.5;font-style:italic">Structured as equity investment — no debt service.</div>
+        </div>`;
+      }
+
+      if (!fin.equity_required) return dropdown;
+
+      // ── Client-side recalc with user's pencil-edits ───────────────────────────
+      const finOv = window._pfFinOverrides || {};
+      // User-editable terms (fall back to scenario defaults from server)
+      const uLtc   = finOv.ltc   != null ? finOv.ltc   : fin.ltc_pct;            // %
+      const uRate  = finOv.rate  != null ? finOv.rate  : fin.interest_rate_pct;  // %
+      const uAmort = finOv.amort != null ? finOv.amort : fin.amort_years;        // years
+      const isEdited = finOv.ltc != null || finOv.rate != null || finOv.amort != null;
+
+      // Insurance premium: auto-applied per scenario (CMHC only), not user-editable
+      const insPremFrac = scenarioKey === 'cmhc_mli' ? ((fin.insurance_prem_pct || 0) / 100) : 0;
+
+      // Recalc loan, payment, debt service from user's terms
+      // Total project cost = loan_total_est / (ltc * (1+premium))  — back it out from server
+      // Safer: total project cost = equity_required / (1 - server_ltc/100)
+      const totalProjectCost = fin.ltc_pct > 0 ? (fin.equity_required / (1 - fin.ltc_pct/100)) : 0;
+      const uLoanBase   = totalProjectCost * (uLtc / 100);
+      const uLoanTotal  = uLoanBase * (1 + insPremFrac);
+      const uMonthlyRate = (uRate / 100) / 12;
+      const uNPayments   = uAmort * 12;
+      let uMonthlyPmt = 0;
+      if (uLoanTotal > 0 && uNPayments > 0) {
+        if (uMonthlyRate > 0) {
+          uMonthlyPmt = uLoanTotal * (uMonthlyRate * Math.pow(1+uMonthlyRate, uNPayments)) / (Math.pow(1+uMonthlyRate, uNPayments) - 1);
+        } else {
+          uMonthlyPmt = uLoanTotal / uNPayments;
+        }
+      }
+      const uAnnualDebt = uMonthlyPmt * 12;
+      const uEquity     = totalProjectCost * (1 - uLtc / 100);
+
+      const editedBadge = isEdited ? ' <span style="font-size:9px;color:var(--amber,#f59e0b);font-weight:700;letter-spacing:.3px">· EDITED</span>' : '';
+
+      // Pencil-edit helper (generates display+input pair for one field)
+      const pencilRow = (field, label, value, suffix, step, min, max) => `
+        <div class="w-pf-row" style="align-items:center">
+          <span>${label}</span>
+          <span style="display:flex;align-items:center;gap:6px">
+            <span id="pff-${field}-display" class="w-pf-val">${value}${suffix}</span>
+            <input id="pff-${field}-input" type="number" step="${step}" min="${min}" max="${max}" value="${value}"
+                   style="display:none;width:80px;padding:4px 7px;border:1px solid var(--gold,#c9a84c);border-radius:4px;font-size:13px;text-align:right;font-weight:600"
+                   onblur="pfFinCommit('${field}')" onkeydown="if(event.key==='Enter')pfFinCommit('${field}');if(event.key==='Escape'){document.getElementById('pff-${field}-input').value='${value}';pfFinCommit('${field}')}">
+            <button id="pff-${field}-btn" onclick="pfFinToggle('${field}')" type="button"
+                    style="background:none;border:0;cursor:pointer;color:#999;padding:2px 4px;font-size:11px"
+                    title="Edit"><i class="fas fa-pencil-alt"></i></button>
+          </span>
+        </div>`;
+
+      const resetBtn = isEdited ? `
+        <div style="text-align:right;margin-top:6px">
+          <button type="button" onclick="pfFinReset()" style="background:none;border:0;color:var(--amber,#f59e0b);font-size:11px;cursor:pointer;font-weight:600;text-decoration:underline">↺ Reset to scenario defaults</button>
+        </div>` : '';
+
+      const financingBlock = `
+        <div class="w-section">
+          <div class="w-section-title">${scenarioLabel} Financing${editedBadge}</div>
+          <div class="w-pf-row"><span>Equity Required</span><span class="w-pf-val" style="font-weight:700">${fmt(uEquity)}</span></div>
+          <div class="w-pf-row"><span>${scenarioKey==='cmhc_mli'?'Insured Loan':'Loan Amount'}</span><span class="w-pf-val">${fmt(uLoanTotal)}</span></div>
+          <div class="w-pf-row"><span>Monthly Payment</span><span class="w-pf-val">${fmt(uMonthlyPmt)}/mo</span></div>
+          <div class="w-pf-row"><span>Annual Debt Service</span><span class="w-pf-val">${fmt(uAnnualDebt)}</span></div>
+          <div style="height:1px;background:#e5e7eb;margin:10px 0"></div>
+          <div style="font-size:10px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Lender Terms · Tap pencil to edit</div>
+          ${pencilRow('ltc',   'Loan-to-Cost',       uLtc,   '%',  '0.5',  '0',   '95')}
+          ${pencilRow('rate',  'Interest Rate',      uRate,  '%',  '0.05', '0',   '20')}
+          ${pencilRow('amort', 'Amortization',       uAmort, ' yr','1',    '1',   '50')}
+          ${insPremFrac > 0 ? `<div class="w-pf-row"><span style="color:#999;font-size:11px">CMHC Insurance Premium</span><span class="w-pf-val" style="color:#999;font-size:11px">${(insPremFrac*100).toFixed(2)}%</span></div>` : ''}
+          ${resetBtn}
+        </div>`;
+
+      const covenantBlock = needsCovenant ? `
+        <div class="w-section" style="background:rgba(245,158,11,0.07);border-left:3px solid var(--amber,#f59e0b);padding:10px 12px">
+          <div style="font-size:11px;color:#78350f;line-height:1.5"><strong>Section 219 Rental Covenant:</strong> The 1.00 FSR density bonus requires all units remain rental tenure (typically 60 years). Individual strata sales prohibited. Building may be sold as a single income-producing asset.</div>
+        </div>` : '';
+
+      return dropdown + financingBlock + covenantBlock;
+    })()}`;
+}
+
+function renderCompareTab(d) {
+  const p = d.property, s = d.strata, r = d.rental, md = d.market_data || {};
+  if (!s || !r) {
+    return `<div class="w-section" style="color:#888;font-size:13px;text-align:center;padding:32px"><i class="fas fa-balance-scale" style="font-size:24px;margin-bottom:12px;display:block;color:#ddd"></i>Comparison requires both Strata and Rental data.</div>`;
+  }
+
+  // ── Strata side — apply same overrides as Strata tab ───────────────────────
+  if (!window._pfOverrides) window._pfOverrides = {};
+  const sOrigBuildPsf = s.buildable_sqft > 0 ? (s.build_cost / s.buildable_sqft) : 420;
+  const sLandVal   = window._pfOverrides.land  != null ? window._pfOverrides.land  : s.land_cost;
+  const sBuildPsf  = window._pfOverrides.build != null ? window._pfOverrides.build : sOrigBuildPsf;
+  const sCfinLtc   = window._pfOverrides.cfin_ltc  != null ? window._pfOverrides.cfin_ltc  : 65;
+  const sCfinRate  = window._pfOverrides.cfin_rate != null ? window._pfOverrides.cfin_rate : 7;
+  const sCfinTerm  = window._pfOverrides.cfin_term != null ? window._pfOverrides.cfin_term : 15;
+  const sUseDetached = window._pfOverrides.useDetached === true;
+  const sDupPsf      = md.avg_sold_psf || 985;
+  const sDetPsf      = md.detached_benchmark ? md.detached_benchmark.avg_psf : null;
+  const sActivePsf   = (sUseDetached && sDetPsf) ? sDetPsf : sDupPsf;
+
+  const sHardBuild  = s.buildable_sqft * sBuildPsf;
+  const sFixedFees  = s.dcl_city_wide + s.dcl_utilities + (s.metro_dcc||0) + s.permit_fees;
+  const sCostBeforeFin = sLandVal + sHardBuild + sFixedFees + s.contingency;
+  const sCfinCost   = sCostBeforeFin * (sCfinLtc/100) * (sCfinRate/100) * (sCfinTerm/12) * 0.5;
+  const sTotalCost  = sCostBeforeFin + sCfinCost;
+  const sExitVal    = s.saleable_sqft * sActivePsf;
+  const sProfit     = sExitVal - sTotalCost;
+  const sRoi        = sTotalCost > 0 ? (sProfit / sTotalCost * 100) : 0;
+
+  // ── Rental side — apply same overrides as Rental tab ───────────────────────
+  if (!window._pfRentalOverrides) window._pfRentalOverrides = {};
+  const rOrigBuildPsf = r.total_buildable_sqft > 0
+    ? ((r.base_build_cost || (r.total_build_cost - (r.density_bonus_cost||0))) / r.total_buildable_sqft)
+    : 420;
+  const rLandVal   = window._pfRentalOverrides.land  != null ? window._pfRentalOverrides.land  : r.land_cost;
+  const rBuildPsf  = window._pfRentalOverrides.build != null ? window._pfRentalOverrides.build : rOrigBuildPsf;
+
+  const rBaseBuild   = r.total_buildable_sqft * rBuildPsf;
+  const rTotalBuild  = rBaseBuild + (r.density_bonus_cost || 0);
+  const rTotalCost   = rLandVal + rTotalBuild + r.total_fees + r.contingency;
+  const rCapRate     = rTotalCost > 0 ? (r.annual_noi / rTotalCost) * 100 : 0;
+  const rMarketCap   = r.market_cap_rate || 0.04;
+  const rStabilizedValue = rMarketCap > 0 ? r.annual_noi / rMarketCap : 0;
+  const rValueCreated    = rStabilizedValue - rTotalCost;
+
+  // Rental cash flow — Year 1 (approximation, matches rental tab)
+  const fin  = r.financing || {};
+  const cf   = r.cash_flow || {};
+  const proj = cf.projections || {};
+  const y1   = proj.year_1 || {};
+  const y1CashFlow = y1.cash_flow || 0;
+  const y10  = proj.year_10;
+  const ytp  = cf.year_to_positive;
+
+  // Row helper
+  const cmpRow = (label, strataVal, rentalVal, opts={}) => {
+    const sClass = opts.sClass || '';
+    const rClass = opts.rClass || '';
+    const note = opts.note ? `<div style="font-size:10px;color:#999;font-weight:400;margin-top:2px">${opts.note}</div>` : '';
+    return `<tr>
+      <td style="padding:9px 6px;border-bottom:1px solid rgba(0,0,0,.05);color:#444;font-size:12px">${label}${note}</td>
+      <td style="padding:9px 6px;border-bottom:1px solid rgba(0,0,0,.05);text-align:right;font-weight:600;font-size:12px;background:rgba(22,101,52,0.04)" class="${sClass}">${strataVal}</td>
+      <td style="padding:9px 6px;border-bottom:1px solid rgba(0,0,0,.05);text-align:right;font-weight:600;font-size:12px;background:rgba(29,78,216,0.04)" class="${rClass}">${rentalVal}</td>
+    </tr>`;
+  };
+
+  const strataEdited = window._pfOverrides.land != null || window._pfOverrides.build != null
+                    || window._pfOverrides.cfin_ltc != null || window._pfOverrides.cfin_rate != null || window._pfOverrides.cfin_term != null
+                    || sUseDetached;
+  const rentalEdited = window._pfRentalOverrides.land != null || window._pfRentalOverrides.build != null;
+  const anyEdited    = strataEdited || rentalEdited;
+
+  return `<div class="w-section">
+      <div class="w-section-title">Path Comparison ${anyEdited?'<span style="font-size:10px;color:var(--amber);font-weight:600;margin-left:6px">✎ Adjusted</span>':''}</div>
+
+      <table style="width:100%;border-collapse:collapse">
+        <thead>
+          <tr>
+            <th style="padding:8px 6px;border-bottom:2px solid rgba(0,0,0,.1);text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#666">&nbsp;</th>
+            <th style="padding:8px 6px;border-bottom:2px solid rgba(0,0,0,.1);text-align:right;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#166534;background:rgba(22,101,52,0.08)">Strata / Sell</th>
+            <th style="padding:8px 6px;border-bottom:2px solid rgba(0,0,0,.1);text-align:right;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#1d4ed8;background:rgba(29,78,216,0.08)">Rental / Hold</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${cmpRow('FSR', '0.70', '1.00')}
+          ${cmpRow('Buildable Area', Math.round(s.buildable_sqft).toLocaleString()+' sf', Math.round(r.total_buildable_sqft).toLocaleString()+' sf')}
+          ${cmpRow('Land Cost', fmt(sLandVal), fmt(rLandVal))}
+          ${cmpRow('Build Cost', fmt(sHardBuild), fmt(rTotalBuild))}
+          ${cmpRow('City Fees', fmt(sFixedFees), fmt(r.total_fees))}
+          ${cmpRow('Construction Financing', fmt(sCfinCost), '—')}
+          ${cmpRow('Total Project Cost', '<strong>'+fmt(sTotalCost)+'</strong>', '<strong>'+fmt(rTotalCost)+'</strong>')}
+          <tr><td colspan="3" style="height:8px"></td></tr>
+          ${cmpRow('Exit / Income', fmt(sExitVal)+' sale', fmt(r.annual_noi)+'/yr NOI')}
+          ${cmpRow('Return', sRoi.toFixed(1)+'% ROI', rCapRate.toFixed(2)+'% cap')}
+          ${cmpRow('Equity Required', 'N/A <span style="font-size:10px;color:#999">(sell)</span>', fin.equity_required ? fmt(fin.equity_required) : '—')}
+          ${cmpRow('Year 1 Outcome', '<span style="color:'+(sProfit>=0?'#166534':'#dc2626')+'">'+(sProfit>=0?'+':'')+fmt(sProfit)+' profit</span>', '<span style="color:'+(y1CashFlow>=0?'#166534':'#dc2626')+'">'+(y1CashFlow>=0?'+':'–')+fmt(Math.abs(y1CashFlow))+' cash flow</span>')}
+          ${cmpRow('Day-1 Equity', '—', '<span style="color:'+(rValueCreated>=0?'#166534':'#dc2626')+'">'+(rValueCreated>=0?'+':'')+fmt(rValueCreated)+'</span>')}
+          ${cmpRow('Long-term Value', fmt(sExitVal)+' <span style="color:#999;font-size:10px">(one-time)</span>', fmt(rStabilizedValue)+' <span style="color:#999;font-size:10px">(stabilized)</span>')}
+          <tr><td colspan="3" style="height:8px"></td></tr>
+          ${cmpRow('Covenant', 'None', '60-yr rental lock', {note: 'Section 219, Land Title Act'})}
+          ${cmpRow('Capital Horizon', '12–18 months', '10+ years')}
+          ${cmpRow('Unit Sale', '✓ Individual strata', '✗ Sell as single asset')}
+        </tbody>
+      </table>
     </div>`;
-}
-
-function renderOutlookTab(d) {
-  const o=d.outlook;
-  if(!o)return`<div class="w-section" style="color:#888;font-size:13px;text-align:center;padding:32px"><i class="fas fa-chart-line" style="font-size:24px;margin-bottom:12px;display:block;color:#ddd"></i>Wynston Outlook requires at least 4 bank/broker forecasts. Check back after the next quarterly update.</div>`;
-  if(o.error)return`<div class="w-section"><div class="w-flag w-flag-yellow"><i class="fas fa-info-circle"></i>${o.message}</div></div>`;
-  const pctClass=o.outlook_pct>=0?'positive':'';
-  return `<div class="w-section"><div class="w-section-title">Wynston Outlook — Price Forecast</div>
-      <div class="w-outlook-block">
-        <div class="w-psf-row"><span>Build cost / sqft</span><span class="w-psf-val">${fmtK(o.current_build_psf)}</span></div>
-        <div class="w-psf-row"><span>Current sold / sqft</span><span class="w-psf-val">${fmtK(o.current_finished_psf)}</span></div>
-        <div class="w-psf-row" style="border-top:1px solid rgba(0,0,0,.06);margin-top:6px;padding-top:6px"><span style="font-weight:800;color:var(--navy)">Outlook / sqft</span><span class="w-psf-val" style="color:var(--green)">${fmtK(o.outlook_psf)}</span></div>
-        <div class="w-outlook-pct ${pctClass}">${o.outlook_pct>0?'+':''}${o.outlook_pct.toFixed(1)}%</div>
-        <div class="w-conf-range">Range: ${o.confidence_low_pct>=0?'+':''}${o.confidence_low_pct.toFixed(1)}% to ${o.confidence_high_pct>=0?'+':''}${o.confidence_high_pct.toFixed(1)}% &middot; ${o.forecasts_used} sources &middot; ${o.quarter||''}</div>
-      </div>
-    </div>
-    <div class="w-section"><div class="w-section-title">Three-Layer Breakdown</div>
-      <div class="w-pf-row"><span>Macro (banks/brokers)</span><span class="w-pf-val">${o.macro_signal_pct>0?'+':''}${o.macro_signal_pct.toFixed(1)}% × ${Math.round(o.weights_used.macro*100)}%</span></div>
-      <div class="w-pf-row"><span>Local momentum (HPI)</span><span class="w-pf-val">${o.local_momentum_pct>0?'+':''}${o.local_momentum_pct.toFixed(1)}% × ${Math.round(o.weights_used.local*100)}%</span></div>
-      <div class="w-pf-row"><span>Pipeline signal</span><span class="w-pf-val">${o.pipeline_signal_pct>0?'+':''}${o.pipeline_signal_pct.toFixed(1)}% × ${Math.round(o.weights_used.pipeline*100)}%</span></div>
-    </div>
-    <div class="w-section"><div class="w-section-title">Margin Story</div>
-      <div class="w-pf-row"><span>Current margin / sqft</span><span class="w-pf-val">${fmtK(o.current_margin_psf)}</span></div>
-      <div class="w-pf-row"><span>Projected margin / sqft</span><span class="w-pf-val ${o.projected_margin_psf>o.current_margin_psf?'positive':''}">${fmtK(o.projected_margin_psf)}</span></div>
-      <div class="w-pf-row total"><span>Margin improvement</span><span class="w-pf-val ${o.margin_improvement_psf>=0?'positive':'negative'}">${o.margin_improvement_psf>=0?'+':''}${fmtK(o.margin_improvement_psf)}/sqft</span></div>
-    </div>
-    <div class="w-section" style="font-size:11px;color:#aaa;line-height:1.6">Wynston Outlook is an analytical estimate. Not a guarantee. Verify with your financial advisor.</div>`;
-}
-
-function renderDesign(design) {
-  const styles = ['Modern','West Coast','Vancouver Special','Contemporary','Classic','Minimalist','French Country','English Tudor','Mayfair'];
-  const pills = styles.map((s,i) =>
-    `<button class="sp-pill${i===0?' active':''}" onclick="selectBuildStyle(this,'${s}')">${s}</button>`
-  ).join('');
-  return `<div class="w-section"><div class="w-section-title">Blueprint Match — BC Standardized Design</div>
-    <div class="w-design">
-      <div class="w-design-thumb" style="background:var(--navy);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:3px;flex-shrink:0">
-        <i class="fas fa-home" style="color:var(--gold);font-size:20px"></i>
-        <span style="font-size:8px;color:rgba(255,255,255,.5);font-weight:700">${design.design_id}</span>
-      </div>
-      <div class="w-design-info">
-        <div class="w-design-name">${design.design_name}</div>
-        <div style="font-size:11px;color:#888">${design.catalogue} — ${design.design_id}</div>
-        ${design.saving_note?`<div class="w-design-saving"><i class="fas fa-check-circle"></i> ${design.saving_note}</div>`:''}
-        ${design.external_url?`<a class="w-design-link" href="${design.external_url}" target="_blank">View Plans →</a>`:''}
-      </div>
-    </div>
-    <div style="margin-top:10px">
-      <div style="font-size:10px;font-weight:700;color:#aaa;letter-spacing:.5px;text-transform:uppercase;margin-bottom:6px">Select Style</div>
-      <div class="sp-wrap">${pills}</div>
-    </div>
-    <button class="w-viz-btn" onclick="toggle3D()">
-      <i class="fas fa-cube"></i> Visualize on Lot
-    </button>
-  </div>`;
 }
 
 function buildFlags(p) {
@@ -1036,143 +1659,6 @@ function getEligBadge(width,transit,lane) {
   return{cls:'badge-gray',icon:'○',label:'Below Minimum'};
 }
 
-// ── 3D toggle ─────────────────────────────────────────────────
-// ── 3D / GLB on map ───────────────────────────────────────────
-let currentBuildStyle = 'Modern';
-
-const STYLE_MODELS = {
-  'Modern':            'METER.glb',
-  'West Coast':        'METER.glb',
-  'Vancouver Special': 'METER.glb',
-  'Contemporary':      'METER.glb',
-  'Classic':           'METER.glb',
-  'Minimalist':        'METER.glb',
-  'French Country':    'METER.glb',
-  'English Tudor':     'METER.glb',
-  'Mayfair':           'METER.glb',
-};
-
-function selectBuildStyle(btn, style) {
-  document.querySelectorAll('.sp-pill').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  currentBuildStyle = style;
-  if(is3D) { removeGLBLayer(); setTimeout(loadGLBOnMap, 100); }
-}
-
-function toggle3D() {
-  is3D = !is3D;
-  const btn = document.getElementById('btn3d');
-  if(is3D && currentData) {
-    map.easeTo({pitch:60, bearing:-20, duration:800});
-    btn.innerHTML = '<i class="fas fa-map" style="margin-right:5px"></i>Back to Map';
-    btn.classList.add('visible');
-    setTimeout(loadGLBOnMap, 900); // wait for map tilt to complete
-  } else {
-    map.easeTo({pitch:0, bearing:0, duration:600});
-    btn.innerHTML = '<i class="fas fa-cube" style="margin-right:5px"></i>Visualize Build';
-    removeGLBLayer();
-    if(map.getLayer('lot-extrusion')) map.removeLayer('lot-extrusion');
-  }
-}
-
-function removeGLBLayer() {
-  if(map.getLayer('glb-model')) map.removeLayer('glb-model');
-}
-
-function loadGLBOnMap() {
-  if(!currentData || !currentLotLat || !currentLotLng) {
-    fallbackExtrusion(); return;
-  }
-  if(typeof THREE === 'undefined' || !THREE.GLTFLoader) {
-    fallbackExtrusion(); return;
-  }
-
-  const lng = currentLotLng;
-  const lat = currentLotLat;
-  const lotWidth = parseFloat(currentData.property.lot_width_m) || 10.0;
-  const NATIVE_WIDTH = 12.50; // BC catalogue Building Block full duplex width
-  const scale = lotWidth / NATIVE_WIDTH;
-  const modelFile = STYLE_MODELS[currentBuildStyle] || 'METER.glb';
-  const modelUrl = '/assets/models/' + modelFile;
-
-  removeGLBLayer();
-
-  const customLayer = {
-    id: 'glb-model',
-    type: 'custom',
-    renderingMode: '3d',
-
-    onAdd(map, gl) {
-      this.camera   = new THREE.Camera();
-      this.scene    = new THREE.Scene();
-
-      const ambient = new THREE.AmbientLight(0xffffff, 0.9);
-      this.scene.add(ambient);
-      const sun = new THREE.DirectionalLight(0xffffff, 1.4);
-      sun.position.set(50, 100, 50).normalize();
-      this.scene.add(sun);
-      const fill = new THREE.DirectionalLight(0xffffff, 0.4);
-      fill.position.set(-50, 50, -50).normalize();
-      this.scene.add(fill);
-
-      const loader = new THREE.GLTFLoader();
-      loader.load(
-        modelUrl,
-        gltf => {
-          const model = gltf.scene;
-          model.scale.set(scale, scale, scale);
-          this.scene.add(model);
-          map.triggerRepaint();
-        },
-        undefined,
-        () => fallbackExtrusion()
-      );
-
-      this.renderer = new THREE.WebGLRenderer({
-        canvas: map.getCanvas(),
-        context: gl,
-        antialias: true
-      });
-      this.renderer.autoClear = false;
-    },
-
-    render(gl, matrix) {
-      const mercator = mapboxgl.MercatorCoordinate.fromLngLat({lng, lat}, 0);
-      const mScale   = mercator.meterInMercatorCoordinateUnits();
-
-      const transform = new THREE.Matrix4()
-        .makeTranslation(mercator.x, mercator.y, mercator.z)
-        .scale(new THREE.Vector3(mScale, -mScale, mScale));
-
-      this.camera.projectionMatrix = new THREE.Matrix4()
-        .fromArray(matrix)
-        .multiply(transform);
-
-      this.renderer.resetState();
-      this.renderer.render(this.scene, this.camera);
-      this.map.triggerRepaint();
-    }
-  };
-
-  map.addLayer(customLayer);
-}
-
-function fallbackExtrusion() {
-  removeGLBLayer();
-  if(!currentData) return;
-  const w = currentData.property.lot_width_m;
-  if(map.getLayer('lot-extrusion')) map.removeLayer('lot-extrusion');
-  map.addLayer({
-    id: 'lot-extrusion', type: 'fill-extrusion', source: 'lots',
-    filter: ['==', ['get','pid'], currentData.property.pid],
-    paint: {
-      'fill-extrusion-color':   '#002446',
-      'fill-extrusion-height':  w>=15.1?12.5:w>=10.0?10.5:8.5,
-      'fill-extrusion-base':    0,
-      'fill-extrusion-opacity': 0.85
-    }
-  });
-}
 
 // ── Action handlers ───────────────────────────────────────────
 function inquireAcquisition(pid,address){
@@ -1383,6 +1869,265 @@ function toggleMapStyle(){
 // ── Utilities ─────────────────────────────────────────────────
 function fmt(n){return '$'+Math.round(n).toLocaleString('en-CA');}
 function fmtK(n){return '$'+Math.round(n).toLocaleString('en-CA');}
+
+// ── Pro forma override helpers ─────────────────────────────────────────────────
+function pfToggle(field) {
+  const display = document.getElementById('pf-'+field+'-display');
+  const input   = document.getElementById('pf-'+field+'-input');
+  const btn     = document.getElementById('pf-'+field+'-btn');
+  if (!display || !input) return;
+  if (input.style.display !== 'none') { pfCommit(field); return; }
+  display.style.display = 'none';
+  input.style.display   = 'inline-block';
+  if (btn) btn.classList.add('active');
+  input.focus(); input.select();
+}
+
+function pfCommit(field) {
+  const input   = document.getElementById('pf-'+field+'-input');
+  const display = document.getElementById('pf-'+field+'-display');
+  const btn     = document.getElementById('pf-'+field+'-btn');
+  if (!input || !currentData) return;
+  const raw = parseFloat(input.value.replace(/[^0-9.]/g,''));
+  if (!isNaN(raw) && raw > 0) {
+    if (!window._pfOverrides) window._pfOverrides = {};
+    window._pfOverrides[field] = raw;
+  }
+  if (display) display.style.display = '';
+  input.style.display = 'none';
+  if (btn) btn.classList.remove('active');
+  // Re-render whichever tab is active (strata or rental both use pfCommit for their strata-specific fields)
+  if (currentPath === 'rental') {
+    document.getElementById('panel-body').innerHTML = renderRentalTab(currentData);
+  } else {
+    document.getElementById('panel-body').innerHTML = renderStrataTab(currentData);
+  }
+}
+
+function pfToggleDetached(checked) {
+  if (!window._pfOverrides) window._pfOverrides = {};
+  window._pfOverrides.useDetached = checked;
+  if (currentData) document.getElementById('panel-body').innerHTML = renderStrataTab(currentData);
+}
+
+function pfReset() {
+  window._pfOverrides = {};
+  if (currentData) document.getElementById('panel-body').innerHTML = renderStrataTab(currentData);
+}
+
+// ── Session 15 — Standardized Design credit toggle ───────────────────────────
+// Client-side only. $35k credit is applied in both renderStrataTab and
+// renderRentalTab at display time. Setting persists across tab switches for
+// the current lot, resets on new lot open.
+function toggleStdDesign(checked) {
+  window._useStdDesign = !!checked;
+  if (!currentData) return;
+  if (currentPath === 'rental') {
+    document.getElementById('panel-body').innerHTML = renderRentalTab(currentData);
+  } else {
+    document.getElementById('panel-body').innerHTML = renderStrataTab(currentData);
+  }
+}
+
+// ── Strata financing scenario switcher (Session 16) ──────────────────────────
+// Flips between 'construction' (default, with pencil-editable LTC/Rate/Term)
+// and 'all_cash' (no debt, zero financing cost). Triggers a full re-render
+// of the strata tab so the cost stack + section below update together.
+function changeStrataFinScenario(scenarioKey) {
+  if (scenarioKey !== 'all_cash' && scenarioKey !== 'construction') return;
+  window._strataFinScenario = scenarioKey;
+  if (currentData) {
+    document.getElementById('panel-body').innerHTML = renderStrataTab(currentData);
+  }
+}
+
+// ── Strata Construction Financing edit helpers (Session NEW) ──────────────────
+// Edits: LTC %, Rate %, Term months. Stored in _pfOverrides under cfin_* keys.
+function pfCfinToggle(field) {
+  const display = document.getElementById('pf-cfin-'+field+'-display');
+  const input   = document.getElementById('pf-cfin-'+field+'-input');
+  const btn     = document.getElementById('pf-cfin-'+field+'-btn');
+  if (!display || !input) return;
+  if (input.style.display !== 'none') { pfCfinCommit(field); return; }
+  display.style.display = 'none';
+  input.style.display   = 'inline-block';
+  if (btn) btn.classList.add('active');
+  input.focus(); input.select();
+}
+function pfCfinCommit(field) {
+  const input   = document.getElementById('pf-cfin-'+field+'-input');
+  const display = document.getElementById('pf-cfin-'+field+'-display');
+  const btn     = document.getElementById('pf-cfin-'+field+'-btn');
+  if (!input || !currentData) return;
+  const raw = parseFloat(input.value.replace(/[^0-9.]/g,''));
+  if (!isNaN(raw) && raw >= 0) {
+    if (!window._pfOverrides) window._pfOverrides = {};
+    // Store with key like 'cfin_ltc', 'cfin_rate', 'cfin_term'
+    window._pfOverrides['cfin_'+field] = raw;
+  }
+  if (display) display.style.display = '';
+  input.style.display = 'none';
+  if (btn) btn.classList.remove('active');
+  document.getElementById('panel-body').innerHTML = renderStrataTab(currentData);
+}
+
+// ── Rental pencil-edit helpers (Session NEW) ──────────────────────────────────
+// Independent from strata — rental overrides stored in _pfRentalOverrides
+// ── Financing scenario re-fetch (Session B) ───────────────────────────────────
+// Changes financing_scenario param, preserves all other rental overrides.
+// Dropdown onChange calls this; feasibility re-fetches; renderPanelBody re-renders.
+function changeFinancingScenario(newKey) {
+  const validKeys = ['cmhc_mli','conventional','private','all_cash'];
+  if (!validKeys.includes(newKey)) return;
+  if (!currentLot) return;
+  window._financingScenario = newKey;
+  // Clear financing pencil-edits on scenario change (fresh slate per Session B)
+  window._pfFinOverrides = {};
+
+  // Preserve rental land/build overrides through re-fetch
+  const rov = window._pfRentalOverrides || {};
+  let url = `/api/feasibility.php?pid=${encodeURIComponent(currentLot)}&path=rental&financing_scenario=${encodeURIComponent(newKey)}`;
+  if (rov.land  != null) url += '&rental_land_override='      + Math.round(rov.land);
+  if (rov.build != null) url += '&rental_build_psf_override=' + Math.round(rov.build);
+
+  const seq = ++fetchSeq;
+  const dd = document.getElementById('financing-scenario-dd');
+  if (dd) dd.disabled = true;
+
+  fetch(url)
+    .then(r => r.json())
+    .then(d => {
+      if (seq !== fetchSeq) return;
+      currentData = d;
+      if (currentPath === 'rental' || currentPath === 'compare') {
+        renderPanelBody(d, currentPath);
+      }
+      if (dd) dd.disabled = false;
+    })
+    .catch(() => {
+      if (dd) dd.disabled = false;
+    });
+}
+function pfRentalToggle(field) {
+  const display = document.getElementById('pfr-'+field+'-display');
+  const input   = document.getElementById('pfr-'+field+'-input');
+  const btn     = document.getElementById('pfr-'+field+'-btn');
+  if (!display || !input) return;
+  if (input.style.display !== 'none') { pfRentalCommit(field); return; }
+  display.style.display = 'none';
+  input.style.display   = 'inline-block';
+  if (btn) btn.classList.add('active');
+  input.focus(); input.select();
+}
+function pfRentalCommit(field) {
+  const input   = document.getElementById('pfr-'+field+'-input');
+  const display = document.getElementById('pfr-'+field+'-display');
+  const btn     = document.getElementById('pfr-'+field+'-btn');
+  if (!input || !currentData) return;
+  const raw = parseFloat(input.value.replace(/[^0-9.]/g,''));
+  if (!isNaN(raw) && raw > 0) {
+    if (!window._pfRentalOverrides) window._pfRentalOverrides = {};
+    window._pfRentalOverrides[field] = raw;
+  }
+  if (display) display.style.display = '';
+  input.style.display = 'none';
+  if (btn) btn.classList.remove('active');
+  document.getElementById('panel-body').innerHTML = renderRentalTab(currentData);
+}
+// ── Financing pencil-edit helpers (Session B) ─────────────────────────────────
+// LTC / Rate / Amort editable by user on top of selected scenario.
+// Stored in _pfFinOverrides; client-side recalc in renderRentalTab.
+function pfFinToggle(field) {
+  const display = document.getElementById('pff-'+field+'-display');
+  const input   = document.getElementById('pff-'+field+'-input');
+  const btn     = document.getElementById('pff-'+field+'-btn');
+  if (!display || !input) return;
+  if (input.style.display !== 'none') { pfFinCommit(field); return; }
+  display.style.display = 'none';
+  input.style.display   = 'inline-block';
+  if (btn) btn.classList.add('active');
+  input.focus(); input.select();
+}
+function pfFinCommit(field) {
+  const input = document.getElementById('pff-'+field+'-input');
+  if (!input || !currentData) return;
+  const raw = parseFloat(input.value.replace(/[^0-9.]/g,''));
+  if (!isNaN(raw) && raw >= 0) {
+    if (!window._pfFinOverrides) window._pfFinOverrides = {};
+    const fin = (currentData.rental && currentData.rental.financing) || {};
+    const defaults = { ltc: fin.ltc_pct, rate: fin.interest_rate_pct, amort: fin.amort_years };
+    // Drop override if it matches the scenario default (clean edit state)
+    if (Math.abs(raw - (defaults[field] || 0)) < 0.001) {
+      delete window._pfFinOverrides[field];
+    } else {
+      window._pfFinOverrides[field] = raw;
+    }
+  }
+  if (currentPath === 'rental') {
+    document.getElementById('panel-body').innerHTML = renderRentalTab(currentData);
+  } else if (currentPath === 'compare') {
+    document.getElementById('panel-body').innerHTML = renderCompareTab(currentData);
+  }
+}
+function pfFinReset() {
+  window._pfFinOverrides = {};
+  if (currentData && currentPath === 'rental') {
+    document.getElementById('panel-body').innerHTML = renderRentalTab(currentData);
+  } else if (currentData && currentPath === 'compare') {
+    document.getElementById('panel-body').innerHTML = renderCompareTab(currentData);
+  }
+}
+function pfRentalReset() {
+  window._pfRentalOverrides = {};
+  window._pfFinOverrides    = {};
+  if (currentData) document.getElementById('panel-body').innerHTML = renderRentalTab(currentData);
+}
+
+// ── Open report with current panel state as URL params ────────────────────────
+function openReport(pid) {
+  const ov  = window._pfOverrides       || {};
+  const rov = window._pfRentalOverrides || {};
+  const md  = currentData && currentData.market_data || {};
+  // Tab to report path mapping:
+  //   strata  → strata-only report (5-6 pages)
+  //   rental  → rental-only report (5-6 pages)
+  //   compare → combined report with Path Comparison + Wynston Outlook (v9's 'outlook' path)
+  const reportPath = currentPath === 'compare' ? 'outlook' : currentPath;
+  let url = '/generate-report.php?pid='+encodeURIComponent(pid)+'&path='+reportPath;
+  // Strata overrides
+  if (ov.land  != null) url += '&land_override='       + Math.round(ov.land);
+  if (ov.build != null) url += '&build_psf_override='  + Math.round(ov.build);
+  if (ov.useDetached && md.detached_benchmark) {
+    url += '&psf_override=' + Math.round(md.detached_benchmark.avg_psf) + '&psf_mode=detached';
+  }
+  // Strata construction financing overrides
+  if (ov.cfin_ltc  != null) url += '&strata_cfin_ltc='  + (ov.cfin_ltc  / 100); // store as fraction
+  if (ov.cfin_rate != null) url += '&strata_cfin_rate=' + (ov.cfin_rate / 100); // store as fraction
+  if (ov.cfin_term != null) url += '&strata_cfin_term=' + Math.round(ov.cfin_term);
+  // Rental independent overrides
+  if (rov.land  != null) url += '&rental_land_override='      + Math.round(rov.land);
+  if (rov.build != null) url += '&rental_build_psf_override=' + Math.round(rov.build);
+// Financing scenario (Session B) — pass through to rental + compare reports
+  const scenKey = window._financingScenario || 'cmhc_mli';
+  if ((reportPath === 'rental' || reportPath === 'outlook') && scenKey !== 'cmhc_mli') {
+    url += '&financing_scenario=' + encodeURIComponent(scenKey);
+  }
+  // Financing pencil-edits (Session B) — LTC%, rate%, amort-years
+  const fov = window._pfFinOverrides || {};
+  if (reportPath === 'rental' || reportPath === 'outlook') {
+    if (fov.ltc   != null) url += '&fin_ltc='   + (fov.ltc / 100);   // fraction
+    if (fov.rate  != null) url += '&fin_rate='  + (fov.rate / 100);  // fraction
+    if (fov.amort != null) url += '&fin_amort=' + Math.round(fov.amort);
+  }
+  // Session 15 — Standardized Design credit flag
+  if (window._useStdDesign === true) url += '&use_std_design=1';
+  // Session 16 — Strata All Cash flag (zero out construction financing in report)
+  // Only send when strata or compare path — rental has its own financing scenario
+  if ((reportPath === 'strata' || reportPath === 'outlook') && window._strataFinScenario === 'all_cash') {
+    url += '&strata_all_cash=1';
+  }
+  window.open(url, '_blank');
+}
 function escHtml(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 function showError(msg){document.getElementById('panel-body').innerHTML=`<div class="w-section" style="color:#c00;text-align:center;padding:32px"><i class="fas fa-exclamation-circle" style="font-size:24px;margin-bottom:10px;display:block"></i>${msg||'Error loading lot data.'}</div>`;}
 function skeletonHTML(){return`<div class="w-section"><div class="w-skeleton" style="width:60%;margin-bottom:12px"></div><div class="w-skeleton"></div><div class="w-skeleton" style="width:80%;margin-top:6px"></div></div><div class="w-section"><div class="w-skeleton" style="width:40%;margin-bottom:10px"></div><div class="w-skeleton"></div><div class="w-skeleton" style="width:75%;margin-top:6px"></div></div>`;}
