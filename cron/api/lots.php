@@ -1,0 +1,76 @@
+<?php
+// Enable gzip compression — reduces ~20MB GeoJSON payload to ~2-3MB on the wire.
+// Must be called BEFORE any output, including headers.
+if (!ob_start('ob_gzhandler')) {
+    ob_start();
+}
+
+header("Content-Type: application/json");
+header("Cache-Control: no-store");
+
+try {
+    $pdo = new PDO(
+        "mysql:host=localhost;dbname=u990588858_Property;charset=utf8mb4",
+        "u990588858_Multiplex",
+        "Concac1979\$",
+        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
+    );
+
+    $sql = "
+        SELECT pid, address, lat, lng,
+               lot_width_m, lot_area_sqm,
+               lane_access, transit_proximate,
+               nearest_ftn_stop_m, profitability_score,
+               heritage_category, peat_zone, has_active_permit,
+               floodplain_risk, easement_present, easement_types
+        FROM   plex_properties
+        WHERE  lat IS NOT NULL
+          AND  lng IS NOT NULL
+          AND  lot_area_sqm <= 3000
+          AND pid NOT IN (SELECT pid FROM excluded_pids)
+        ORDER BY pid
+    ";
+
+    $lots = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+
+    // Build GeoJSON FeatureCollection — required format for Mapbox addSource
+    $features = [];
+    foreach ($lots as $lot) {
+        $features[] = [
+            'type'     => 'Feature',
+            'geometry' => [
+                'type'        => 'Point',
+                'coordinates' => [(float)$lot['lng'], (float)$lot['lat']],
+            ],
+            'properties' => [
+                'pid'                => $lot['pid'],
+                'address'            => $lot['address'],
+                'lot_width_m'        => (float)$lot['lot_width_m'],
+                'lot_area_sqm'       => (float)$lot['lot_area_sqm'],
+                'lane_access'        => (int)$lot['lane_access'],
+                'transit_proximate'  => (int)$lot['transit_proximate'],
+                'nearest_ftn_stop_m' => (int)$lot['nearest_ftn_stop_m'],
+                'profitability_score'=> (float)$lot['profitability_score'],
+                'heritage_category'  => $lot['heritage_category'],
+                'peat_zone'          => (int)$lot['peat_zone'],
+                'has_active_permit'  => (int)($lot['has_active_permit'] ?? 0),
+                'floodplain_risk'    => $lot['floodplain_risk'] ?? 'none',
+                'easement_present'   => (int)($lot['easement_present'] ?? 0),
+                'easement_types'     => $lot['easement_types'] ?? '',
+            ],
+        ];
+    }
+
+    echo json_encode([
+        'type'     => 'FeatureCollection',
+        'features' => $features,
+    ]);
+
+} catch (Exception $e) {
+    http_response_code(500);
+    echo json_encode([
+        'type'     => 'FeatureCollection',
+        'features' => [],
+        'error'    => $e->getMessage(),
+    ]);
+}
