@@ -118,6 +118,27 @@ $pending_devs = count(array_filter($developers, fn($d) => $d['status'] === 'pend
                 <span style="color:#888;">Last login</span><span><?= $dv['last_login'] ? date('M j, Y g:ia', strtotime($dv['last_login'])) : 'Never' ?></span>
                 <span style="color:#888;">Subscription</span><strong><?= ucfirst($dv['subscription_tier'] ?? 'free') ?></strong>
             </div>
+            <!-- Change user_type — posts to dev_set_type handler in admin.php -->
+            <form method="POST" action="admin.php?tab=developers&dev_view=<?= $dev_view ?>" style="margin-top:14px;padding-top:14px;border-top:1px dashed #e2e8f0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <input type="hidden" name="dev_id" value="<?= $dev_view ?>">
+                <label style="font-size:12px;color:#555;font-weight:600;">Change role:</label>
+                <select name="user_type" style="padding:6px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px;">
+                    <?php
+                    $role_options = [
+                        'builder'    => 'Builder',
+                        'realtor'    => 'Realtor',
+                        'investor'   => 'Investor',
+                        'broker'     => 'Broker',
+                        'home_owner' => 'Home Owner',
+                    ];
+                    $current_ut = $dv['user_type'] ?? 'builder';
+                    foreach ($role_options as $val => $lbl):
+                    ?>
+                    <option value="<?= $val ?>" <?= $current_ut === $val ? 'selected' : '' ?>><?= $lbl ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <button type="submit" name="dev_set_type" value="1" style="background:#002446;color:#fff;padding:6px 14px;border-radius:6px;font-size:12px;font-weight:700;border:0;cursor:pointer;">Update Role</button>
+            </form>
             <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
                 <?php if ($st !== 'approved'): ?>
                 <a href="admin.php?dev_approve=<?= $dev_view ?>" style="background:#16a34a;color:#fff;padding:6px 14px;border-radius:6px;font-size:12px;font-weight:700;text-decoration:none;" onclick="return confirm('Approve?')">✓ Approve</a>
@@ -297,7 +318,7 @@ $pending_devs = count(array_filter($developers, fn($d) => $d['status'] === 'pend
             $ut  = $dev['user_type'] ?? 'builder';
             $st  = $dev['status'] ?? 'pending';
             $sc  = $st === 'approved' ? 'background:#dcfce7;color:#16a34a;' : ($st === 'suspended' ? 'background:#fee2e2;color:#dc2626;' : 'background:#fef3c7;color:#b45309;');
-            $utc = ['builder' => '#0369a1', 'investor' => '#6d28d9', 'realtor' => '#166534', 'broker' => '#92400e'][$ut] ?? '#475569';
+            $utc = ['builder' => '#0369a1', 'investor' => '#6d28d9', 'realtor' => '#166534', 'broker' => '#92400e', 'home_owner' => '#be185d'][$ut] ?? '#475569';
             $eff = (int)($dev['daily_report_limit'] ?? 5) + (int)($dev['bonus_reports'] ?? 0);
             $today_r = (int)($dev['reports_today'] ?? 0);
         ?>

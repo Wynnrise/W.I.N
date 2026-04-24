@@ -1137,13 +1137,53 @@ table.dt tr:last-child td{border-bottom:none}
 
 /* ─── PRINT OVERRIDES ────────────────────────────────────────────────────────── */
 @media print {
-    @page{margin:0;size:letter portrait}
-    @page:first{margin:0}
+    /* Default @page: 28px bottom margin reserves space for "Page X of Y".
+       No top margin — each .page has its own in-flow .page-header that
+       handles navy banding in print the same way it does on screen. */
+    @page {
+        margin: 0 0 28px 0;
+        size: letter portrait;
+        @bottom-right {
+            content: "Page " counter(page) " of " counter(pages);
+            font-family: 'Work Sans', sans-serif;
+            font-size: 8.5px;
+            font-weight: 500;
+            letter-spacing: .14em;
+            text-transform: uppercase;
+            color: #6b6b6b;
+            padding: 10px 48px 0;
+            vertical-align: top;
+        }
+    }
+    /* Cover page — flush bleed, no page counter. */
+    @page :first {
+        margin: 0;
+        @bottom-right { content: ""; }
+    }
+    /* Back cover — flush bleed, no page counter.
+       "Powered by W.I.N" line inside the navy panel stays as the only
+       footer attribution on the back cover. */
+    .page.back-cover-page { page: backcover; }
+    @page backcover {
+        margin: 0;
+        @bottom-right { content: ""; }
+    }
     *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}
     html,body{margin:0;padding:0;background:#fff}
     .print-bar{display:none!important}
     .report{width:100%;margin:0;box-shadow:none}
-    .page{width:100%;margin:0;box-shadow:none}
+    /* Release the fixed on-screen min-height so each .page fits inside the
+       margin-reduced printable area. Without this, a 1056px page inside a
+       letter page with a 28px bottom margin overflows and Chrome inserts
+       a blank continuation page after every page. */
+    .page{
+        width:100%;
+        margin:0;
+        box-shadow:none;
+        min-height:auto!important;
+        height:auto!important;
+    }
+    .page:last-child{page-break-after:avoid;break-after:avoid}
     /* Back cover: exact page height — no overflow, no blank continuation */
     .back-cover{height:100vh!important;padding:40px 48px!important;overflow:hidden!important}
     .back-gold-bar{margin:16px -48px 0!important}
@@ -2634,6 +2674,21 @@ $bars = [
 <div style="font-size:10px;color:var(--on-surface-var);font-style:italic">* Annual NOI shown at 10× for scale comparison with capital values.</div>
 </div>
 
+</div>
+</div><!-- /page 5c-part-1: comparison table + bar chart -->
+
+<!-- ───────────────── PAGE 5C (part 2) — UNIT MIX + KEY CONSIDERATION ─────────────────
+     Split from part 1 because the donut + Key Consideration block is tall
+     enough that it overflows onto a second page. Forced onto its own fresh
+     letter page so it always starts with a proper navy header. Same header
+     title as part 1 — both pages belong to the same section. -->
+<div class="page">
+<div class="page-header">
+    <div class="page-header-title">Path Comparison.</div>
+    <div class="page-header-meta">Strata / Sell vs Secured Rental / Hold · <?= $max_units ?> units · <?= htmlspecialchars($nb_display) ?></div>
+</div>
+<div class="page-body tight">
+
 <!-- Unit mix donut — strata -->
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:32px;align-items:start">
 <div>
@@ -2674,7 +2729,7 @@ $bars = [
 </div>
 
 </div>
-</div><!-- /page 5c comparison -->
+</div><!-- /page 5c-part-2: unit mix + key consideration -->
 
 <?php endif; // end path branching for page 5 ?>
 
@@ -3000,6 +3055,48 @@ $_ro_value_up = $fa_cap_rate > 0 ? $_ro_noi_up_y10 / $fa_cap_rate : 0;
 </div>
 <?php endif; ?>
 
+<?php
+// Risk Analysis page split logic.
+//
+// Page 7a always contains: standard risks (1-5) + rental-path risks (6-8)
+// if rental/outlook path.
+//
+// Page 7b is created when page 7a's content is likely to overflow:
+//   - Rental/outlook path: 8 risks fill page 7a vertically, so disclaimer
+//     (and any site flags) MUST go to page 7b. Otherwise the disclaimer
+//     orphans onto a third page with no navy header.
+//   - Strata path: only 5 risks. Page 7a fits the disclaimer at the bottom
+//     comfortably UNLESS the lot has site-specific constraint flags. If it
+//     does, those + the disclaimer get their own page 7b.
+$has_site_flags   = ($heritage !== 'none' || $peat_zone || $in_floodplain || $covenant_present || $easement_present);
+$has_rental_risks = ($pro_forma_path === 'rental' || $pro_forma_path === 'outlook');
+$needs_7b         = $has_site_flags || $has_rental_risks;
+?>
+
+<?php if($needs_7b): ?>
+<!-- Close page 7a (standard + rental-path risks only). Site-specific
+     risks (if any) and the disclaimer move to their own page 7b below. -->
+</div>
+</div><!-- /page 7a: standard + rental-path risks -->
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     PAGE 7B — RISK ANALYSIS (site-specific conditional flags + disclaimer)
+     Rendered when either: the path is rental/outlook (8 risks fill page 7a,
+     forcing disclaimer to its own page), OR the lot has at least one site-
+     specific constraint (heritage, peat, floodplain, covenant, easement).
+     Same navy header as page 7a — both pages belong to the same section.
+═══════════════════════════════════════════════════════════════════════════ -->
+<div class="page">
+<div class="page-header">
+    <div class="page-header-title">Risk Analysis.</div>
+    <div class="page-header-meta"><?= $has_site_flags ? 'Site-specific risk factors' : 'Standard and conditional risk factors' ?></div>
+</div>
+<div class="page-body">
+<?php if($has_site_flags): ?>
+<div class="label-xs" style="margin-bottom:20px">Site-Specific Risk Factors</div>
+<?php endif; ?>
+<?php endif; ?>
+
 <?php if($heritage==='A'||$heritage==='B'): ?>
 <div class="risk-item critical">
     <div class="risk-num">⚠</div>
@@ -3065,13 +3162,13 @@ $_ro_value_up = $fa_cap_rate > 0 ? $_ro_noi_up_y10 / $fa_cap_rate : 0;
 </div>
 
 </div>
-</div><!-- /page 7 -->
+</div><!-- /page 7a (if no site flags) or /page 7b (if site flags present) -->
 
 
 <!-- ═══════════════════════════════════════════════════════════════════════════
      PAGE 8 — BACK COVER
 ═══════════════════════════════════════════════════════════════════════════ -->
-<div class="page">
+<div class="page back-cover-page">
 <div class="back-cover">
 
     <!-- TOP: Company name where WYNSTON was, website where tagline was -->

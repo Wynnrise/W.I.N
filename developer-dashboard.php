@@ -2,7 +2,7 @@
 // ============================================================
 //  developer-dashboard.php  —  Wynston Developer Portal
 //  Merged: Listings dashboard + W.I.N Project Planner
-//  User-type aware: builder | investor | realtor | broker
+//  User-type aware: builder | investor | realtor | broker | home_owner
 // ============================================================
 require_once __DIR__ . '/dev-auth.php';
 dev_require_login('log-in.php');
@@ -16,7 +16,7 @@ $my_listings = [];
 if (in_array($user_type, ['builder', 'realtor'])) {
     try {
         $dev_id = (int)$dev['id'];
-        $s = $pdo->prepare("SELECT id, address, property_type, price, submit_status, is_paid, img1
+        $s = $pdo->prepare("SELECT id, address, property_type, price, submit_status, is_paid, tier, img1
                              FROM multi_2025 WHERE submitted_by = ? ORDER BY id DESC");
         $s->execute([$dev_id]);
         $my_listings = $s->fetchAll(PDO::FETCH_ASSOC);
@@ -100,10 +100,11 @@ $status_labels = [
 
 // Role display config
 $role_config = [
-    'builder'  => ['label' => 'Builder',  'icon' => 'fa-hard-hat',    'colour' => '#002446'],
-    'investor' => ['label' => 'Investor', 'icon' => 'fa-chart-line',  'colour' => '#0065ff'],
-    'realtor'  => ['label' => 'Realtor',  'icon' => 'fa-id-badge',    'colour' => '#22c55e'],
-    'broker'   => ['label' => 'Broker',   'icon' => 'fa-file-invoice-dollar', 'colour' => '#c9a84c'],
+    'builder'    => ['label' => 'Builder',    'icon' => 'fa-hard-hat',             'colour' => '#002446'],
+    'investor'   => ['label' => 'Investor',   'icon' => 'fa-chart-line',           'colour' => '#0065ff'],
+    'realtor'    => ['label' => 'Realtor',    'icon' => 'fa-id-badge',             'colour' => '#22c55e'],
+    'broker'     => ['label' => 'Broker',     'icon' => 'fa-file-invoice-dollar',  'colour' => '#c9a84c'],
+    'home_owner' => ['label' => 'Home Owner', 'icon' => 'fa-house-user',           'colour' => '#be185d'],
 ];
 $rc = $role_config[$user_type] ?? $role_config['builder'];
 
@@ -283,8 +284,13 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--cream);
 .db-badge.pending   { background: #fef3c7; color: #92400e; }
 .db-badge.draft     { background: #f1f5f9; color: #475569; }
 .db-badge.rejected  { background: #fee2e2; color: #991b1b; }
+.db-badge.tier-free      { background: #f0f2f6; color: #888; }
+.db-badge.tier-creative  { background: #fef9ec; color: #b45309; border: 1px solid rgba(180,83,9,0.2); }
+.db-badge.tier-concierge { background: #d4f5e2; color: #1a7a45; border: 1px solid rgba(26,122,69,0.25); }
+/* legacy classes retained for backwards compatibility */
 .db-badge.concierge { background: rgba(201,168,76,0.15); color: #92400e; border: 1px solid rgba(201,168,76,0.4); }
 .db-badge.standard  { background: #f1f5f9; color: #475569; }
+.db-pending-label   { font-size: 12px; font-weight: 600; color: #94a3b8; font-style: italic; }
 .thumb { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; }
 .thumb-placeholder { width: 44px; height: 44px; background: #f1f5f9; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #aaa; }
 
@@ -639,7 +645,7 @@ elseif ($active_tab === 'listings' && in_array($user_type, ['builder', 'realtor'
 <table class="data-table">
     <thead>
         <tr>
-            <th></th><th>Address</th><th>Type</th><th>Price</th><th>Status</th><th>Tier</th>
+            <th></th><th>Address</th><th>Type</th><th>Price</th><th>Status</th><th>Tier</th><th></th>
         </tr>
     </thead>
     <tbody>
@@ -649,6 +655,23 @@ elseif ($active_tab === 'listings' && in_array($user_type, ['builder', 'realtor'
         elseif (in_array($st, ['approved','live'])) { $label = 'Live';    $cls = 'live'; }
         elseif ($st === 'rejected')                 { $label = 'Rejected';$cls = 'rejected'; }
         else                                        { $label = 'Draft';   $cls = 'draft'; }
+
+        // Tier badge — prefer tier column, fall back to is_paid for legacy rows
+        $tier = strtolower(trim($l['tier'] ?? ''));
+        if ($tier === '') {
+            $tier = !empty($l['is_paid']) ? 'concierge' : 'free';
+        }
+        if ($tier === 'concierge')      { $tier_label = 'Concierge'; $tier_cls = 'tier-concierge'; }
+        elseif ($tier === 'creative')   { $tier_label = 'Creative';  $tier_cls = 'tier-creative'; }
+        else                            { $tier_label = 'Free';      $tier_cls = 'tier-free'; }
+
+        // View button — only show for approved/live listings, tier-aware URL
+        $view_url = null;
+        if (in_array($st, ['approved','live'])) {
+            $view_url = ($tier === 'concierge')
+                ? '/concierge-property.php?id=' . urlencode($l['id'])
+                : '/single-property-2.php?id=' . urlencode($l['id']);
+        }
     ?>
     <tr>
         <td>
@@ -662,7 +685,18 @@ elseif ($active_tab === 'listings' && in_array($user_type, ['builder', 'realtor'
         <td style="color:#666;"><?= htmlspecialchars($l['property_type'] ?? '—') ?></td>
         <td style="color:#666;"><?= htmlspecialchars($l['price'] ?? '—') ?></td>
         <td><span class="db-badge <?= $cls ?>"><?= $label ?></span></td>
-        <td><span class="db-badge <?= $l['is_paid'] ? 'concierge' : 'standard' ?>"><?= $l['is_paid'] ? 'Concierge' : 'Standard' ?></span></td>
+        <td><span class="db-badge <?= $tier_cls ?>"><?= $tier_label ?></span></td>
+        <td>
+            <?php if ($view_url): ?>
+                <a class="btn-s btn-view" href="<?= $view_url ?>" target="_blank" rel="noopener"><i class="fas fa-eye"></i>View</a>
+            <?php elseif ($st === 'pending_review'): ?>
+                <span class="db-pending-label">Pending review</span>
+            <?php elseif ($st === 'rejected'): ?>
+                <span class="db-pending-label">—</span>
+            <?php else: ?>
+                <span class="db-pending-label">Draft</span>
+            <?php endif; ?>
+        </td>
     </tr>
     <?php endforeach; ?>
     </tbody>

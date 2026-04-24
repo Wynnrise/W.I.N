@@ -315,7 +315,7 @@ if (isset($_GET['dev_delete'])) {
 if (isset($_POST['dev_set_type'])) {
     $did  = (int)$_POST['dev_id'];
     $type = $_POST['user_type'] ?? 'builder';
-    $allowed = ['builder','investor','realtor','broker'];
+    $allowed = ['builder','investor','realtor','broker','home_owner'];
     if (!in_array($type, $allowed)) $type = 'builder';
     $pdo->prepare("UPDATE developers SET user_type = ? WHERE id = ?")->execute([$type, $did]);
     header("Location: admin.php?tab=developers&msg=" . urlencode("✅ User type updated to '{$type}'."));

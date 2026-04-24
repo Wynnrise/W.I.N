@@ -204,6 +204,33 @@ html,body{height:100%;overflow:hidden;font-family:'Segoe UI',system-ui,sans-seri
 .w-permit-img{width:100%;height:160px;object-fit:cover;display:block}
 .w-permit-img-placeholder{width:100%;height:120px;background:linear-gradient(135deg,#001a35,#002446);display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.2);font-size:32px}
 .w-permit-status-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(201,168,76,.15);border:1px solid rgba(201,168,76,.3);color:var(--gold);font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;padding:4px 10px;border-radius:20px;margin-top:8px}
+/* ── Session 18: Permit showcase block ───────────────── */
+/* State 1: Permit has a live listing — thumbnail + View Details */
+.w-listing-banner{display:flex;gap:12px;align-items:flex-start;background:linear-gradient(135deg,#fffdf5,#fff7e0);border:1px solid rgba(201,168,76,.35);border-radius:10px;padding:12px;margin-bottom:0}
+.w-listing-thumb{width:80px;height:80px;border-radius:8px;object-fit:cover;flex-shrink:0;border:1px solid rgba(0,36,70,.15);background:#f1f5f9}
+.w-listing-thumb-placeholder{display:flex;align-items:center;justify-content:center;color:#aaa;font-size:20px}
+.w-listing-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.w-listing-label{font-size:11px;font-weight:800;color:#1a7a45;text-transform:uppercase;letter-spacing:.5px;display:flex;align-items:center;gap:5px}
+.w-listing-label i{color:#22c55e}
+.w-listing-dev{font-size:13px;font-weight:600;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.w-listing-meta{margin-top:2px}
+.w-listing-tier-badge{display:inline-block;font-size:10px;font-weight:800;padding:2px 8px;border-radius:12px;text-transform:uppercase;letter-spacing:.5px}
+.w-listing-tier-free{background:#f0f2f6;color:#888}
+.w-listing-tier-creative{background:#fef9ec;color:#b45309;border:1px solid rgba(180,83,9,.2)}
+.w-listing-tier-concierge{background:#d4f5e2;color:#1a7a45;border:1px solid rgba(26,122,69,.25)}
+.w-listing-btn{display:inline-flex;align-items:center;gap:6px;margin-top:8px;background:var(--navy);color:var(--gold);padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;text-decoration:none;align-self:flex-start;transition:background .15s}
+.w-listing-btn:hover{background:#003366;color:var(--gold);text-decoration:none}
+/* State 2-4: Showcase CTA (sign-in / builder-realtor / soft-info) */
+.w-showcase-cta{background:#fafaf7;border:1px dashed rgba(0,36,70,.2);border-radius:10px;padding:14px;margin-bottom:0;text-align:left}
+.w-showcase-prompt{font-size:13px;color:var(--navy);margin-bottom:4px}
+.w-showcase-prompt i{color:var(--gold);margin-right:4px}
+.w-showcase-sub{font-size:12px;color:#666;line-height:1.5;margin-bottom:10px}
+.w-showcase-btn-gold{display:inline-flex;align-items:center;gap:6px;background:var(--gold);color:var(--navy);padding:9px 16px;border-radius:6px;font-size:12px;font-weight:800;text-decoration:none;transition:background .15s}
+.w-showcase-btn-gold:hover{background:#d4b35c;color:var(--navy);text-decoration:none}
+.w-showcase-btn-outline{display:inline-flex;align-items:center;gap:6px;background:transparent;color:var(--navy);border:1px solid rgba(0,36,70,.25);padding:8px 16px;border-radius:6px;font-size:12px;font-weight:700;text-decoration:none;transition:background .15s}
+.w-showcase-btn-outline:hover{background:rgba(0,36,70,.05);text-decoration:none;color:var(--navy)}
+.w-showcase-note{font-size:12px;color:#666;line-height:1.5}
+.w-showcase-note i{color:var(--gold);margin-right:4px}
 /* ── Toast notifications ──────────────────────────── */
 .w-toast-wrap{position:fixed;bottom:32px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none}
 .w-toast{background:rgba(0,20,46,.97);backdrop-filter:blur(12px);border:1px solid rgba(201,168,76,.4);color:#fff;font-size:13px;font-weight:600;padding:10px 20px;border-radius:24px;box-shadow:0 4px 20px rgba(0,0,0,.4);opacity:0;transform:translateY(12px);transition:opacity .25s,transform .25s;pointer-events:none;white-space:nowrap}
@@ -378,6 +405,96 @@ html,body{height:100%;overflow:hidden;font-family:'Segoe UI',system-ui,sans-seri
 // ── Config ────────────────────────────────────────────────────
 const MAPBOX_TOKEN = 'pk.eyJ1IjoiaGVucmluZ3V5ZW4iLCJhIjoiY21uYjg3dTNnMHFkZjJwcHR0bjkwb29ueCJ9.De7GXPlYRlzTJOr9jd5BJg';
 const IS_LOGGED_IN = <?= isset($_SESSION['dev_id']) ? 'true' : 'false' ?>;
+<?php
+  // Expose user_type to JS for showcase gating (Session 18)
+  $_js_user_type = '';
+  if (function_exists('dev_current') && isset($_SESSION['dev_id'])) {
+      $_d = dev_current();
+      $_js_user_type = $_d['user_type'] ?? '';
+  }
+?>
+const USER_TYPE    = <?= json_encode($_js_user_type) ?>;
+
+// ── Permit listing enrichment (Session 18) ──────────────────
+// Fetched in parallel with /api/permits.php. Populated client-side
+// so the map side panel can show thumbnails + "View Details" for
+// permits that have a live Wynston listing. Address-keyed primary
+// lookup, coord-keyed fallback for corner-lot address mismatches.
+let permitListings = {};       // { normalized_address: listing }
+let permitListingsByCoord = {}; // { "lat,lng": listing } — fallback
+let permitListingsLoaded = false;
+
+function normalizeAddress(addr) {
+  if (!addr) return '';
+  let s = String(addr).toLowerCase().trim();
+  // Strip unit/suite prefixes
+  s = s.replace(/^(#|unit\s+|suite\s+|apt\s+|apartment\s+)[\w\-]+\s*[-,]?\s*/i, '');
+  // Strip everything after first comma (city/province/postal)
+  const cIdx = s.indexOf(',');
+  if (cIdx !== -1) s = s.substring(0, cIdx);
+  // Strip punctuation
+  s = s.replace(/[.,'"#]/g, '');
+  // Normalize street types
+  s = s.replace(/\bstreet\b/g, 'st');
+  s = s.replace(/\bavenue\b/g, 'ave');
+  s = s.replace(/\bboulevard\b/g, 'blvd');
+  s = s.replace(/\bdrive\b/g, 'dr');
+  s = s.replace(/\broad\b/g, 'rd');
+  s = s.replace(/\bplace\b/g, 'pl');
+  s = s.replace(/\bcrescent\b/g, 'cres');
+  s = s.replace(/\bcourt\b/g, 'ct');
+  s = s.replace(/\bhighway\b/g, 'hwy');
+  s = s.replace(/\bparkway\b/g, 'pkwy');
+  s = s.replace(/\blane\b/g, 'ln');
+  // Strip ordinal suffixes: "17th" -> "17"
+  s = s.replace(/(\d+)(st|nd|rd|th)\b/g, '$1');
+  // Collapse whitespace
+  s = s.replace(/\s+/g, ' ').trim();
+  // Reorder leading directional to trailing position
+  const m = s.match(/^(\d+)\s+(n|s|e|w|north|south|east|west)\s+(.+)$/);
+  if (m) {
+    let dir = m[2];
+    if (dir === 'north') dir = 'n';
+    else if (dir === 'south') dir = 's';
+    else if (dir === 'east')  dir = 'e';
+    else if (dir === 'west')  dir = 'w';
+    s = m[1] + ' ' + m[3] + ' ' + dir;
+  }
+  // Normalize any remaining long directionals
+  s = s.replace(/\b(north|south|east|west)\b/g, (full, word) => word[0]);
+  s = s.replace(/\s+/g, ' ').trim();
+  return s;
+}
+
+// Rounded coord key — ~11m precision. Must match PHP coord_key().
+function coordKey(lat, lng) {
+  if (lat == null || lng == null || lat === '' || lng === '') return '';
+  const la = parseFloat(lat);
+  const ln = parseFloat(lng);
+  if (isNaN(la) || isNaN(ln)) return '';
+  return la.toFixed(4) + ',' + ln.toFixed(4);
+}
+
+// Look up a permit's listing: try address first, coord fallback second.
+function findListingForPermit(p) {
+  if (!p) return null;
+  const addrKey = normalizeAddress(p.address || '');
+  if (addrKey && permitListings[addrKey]) return permitListings[addrKey];
+  const cKey = coordKey(p._lat ?? p.lat, p._lng ?? p.lng ?? p.longitude);
+  if (cKey && permitListingsByCoord[cKey]) return permitListingsByCoord[cKey];
+  return null;
+}
+
+fetch('/api/permit_listings.php')
+  .then(r => r.json())
+  .then(data => {
+    if (data && data.ok && data.listings) {
+      permitListings = data.listings;
+      permitListingsByCoord = data.by_coords || {};
+      permitListingsLoaded = true;
+    }
+  })
+  .catch(() => { /* enrichment optional — map still works if this fails */ });
 
 // ── State ─────────────────────────────────────────────────────
 let map, currentLot = null, currentLotLat = 0, currentLotLng = 0, fetchSeq = 0;
@@ -747,14 +864,54 @@ map.on('click','permit-pins',(e)=>{
   openPermitPanel(p);
 });
 
+// ── Session 20: permit-priority hit test ──────────────────────
+// Layer-specific click handlers can miss depending on paint
+// order. This map-level handler runs on every click, checks if
+// a permit pin is under the pointer, and routes to
+// openPermitPanel. openPermitPanel's idempotency prevents
+// double-fires when the permit-pins layer handler ALSO catches
+// the same click.
+map.on('click', (e) => {
+  const permitHits = map.queryRenderedFeatures(e.point, { layers: ['permit-pins'] });
+  if (permitHits && permitHits.length > 0) {
+    const pf = permitHits[0];
+    const pp = Object.assign({}, pf.properties);
+    const pc = pf.geometry.coordinates;
+    pp._lng = pc[0]; pp._lat = pc[1];
+    setSelectedLot(pc[1], pc[0]);
+    openPermitPanel(pp);
+  }
+});
+
 // ── Permit panel ──────────────────────────────────────────────
+// Session 20: permitMeta carries the permit feature properties
+// (incl. has_listing, listing_tier, listing_detail_url) from
+// click-time until renderPanel() consumes it. openPermitPanel
+// is idempotent by permit id so overlapping layer handlers
+// (lot-pins + permit-pins firing on the same click) don't
+// double-invoke nearest_lot and race renderPanel.
 let permitMeta = null;
+let _lastOpenedPid = null;
+let _lastPermitOpenId = null;
+let _lastPermitOpenAt = 0;
 function openPermitPanel(p) {
-  permitMeta=p;
-  const lat=parseFloat(p._lat??p.lat??0), lng=parseFloat(p._lng??p.lng??0);
+  const pid = p && (p.id || p.permit_number);
+  const now = Date.now();
+  if (pid && pid === _lastPermitOpenId && (now - _lastPermitOpenAt) < 500) {
+    return;
+  }
+  _lastPermitOpenId = pid;
+  _lastPermitOpenAt = now;
+  permitMeta = p;
+  const lat = parseFloat(p._lat ?? p.lat ?? 0);
+  const lng = parseFloat(p._lng ?? p.lng ?? 0);
   fetch(`/api/nearest_lot.php?lat=${lat}&lng=${lng}`)
-    .then(r=>r.json()).then(result=>{ if(result&&result.pid)openPanel(result.pid); else showPermitOnlyPanel(p); })
-    .catch(()=>showPermitOnlyPanel(p));
+    .then(r => r.json())
+    .then(result => {
+      if (result && result.pid) openPanel(result.pid);
+      else showPermitOnlyPanel(p);
+    })
+    .catch(() => showPermitOnlyPanel(p));
 }
 function showPermitOnlyPanel(p) {
   permitMeta=null;
@@ -766,13 +923,121 @@ function showPermitOnlyPanel(p) {
   if(el('ph-pid'))el('ph-pid').textContent=p.neighbourhood||p.neighborhood||'';
   if(el('ph-badge'))el('ph-badge').innerHTML='<div class="w-elig-badge badge-gold"><i class="fas fa-hard-hat"></i> Active Building Permit</div>';
   if(el('ph-confidence'))el('ph-confidence').innerHTML='';
-  if(el('panel-body'))el('panel-body').innerHTML=`<div class="w-section"><div class="w-flag w-flag-gold" style="margin-bottom:0"><i class="fas fa-hard-hat"></i><span><strong>Development In Progress</strong> — Feasibility data based on current market conditions.</span></div></div><div class="w-section" style="color:#aaa;font-size:13px">No matching lot found in database.</div>`;
+  if(el('panel-body'))el('panel-body').innerHTML=renderPermitShowcaseBlock({...p, fromPermit:true}) + `<div class="w-section" style="color:#aaa;font-size:13px">No matching lot found in database.</div>`;
   if(el('panel-actions'))el('panel-actions').style.display='none';
   setTimeout(()=>map.resize(),310);
 }
 
+// ── Permit showcase block (Session 18, patched Session 20) ─────
+// Renders one of several states in the side-panel:
+//   (A) Lot has a live listing → thumbnail + View Property (always, any user path)
+//   (B) No listing but came from a permit star:
+//       B1. Not logged in            → "Sign in to showcase" CTA
+//       B2. Logged in builder/realtor → gold "Showcase This Project" CTA
+//       B3. Logged in investor/broker/home_owner → soft italic info text
+//   (C) No listing AND not from a permit → render nothing
+//
+// Session 20: State A now has two data paths. PRIMARY path uses the
+// inline listing data returned by api/permits.php (via the multi_2025_id
+// FK added in Session 19 Part A). FALLBACK path uses the old address-
+// matching lookup from api/permit_listings.php — retained in case a
+// permit pre-dates the FK back-fill or the listing isn't linked yet.
+//
+// Input: p = { address, pid, _lat, _lng, fromPermit?,
+//              has_listing?, listing_tier?, listing_thumbnail?,
+//              listing_detail_url?, developer_name? }
+// Output: HTML string (empty when nothing to render)
+function renderPermitShowcaseBlock(p) {
+  if (!p || !p.address) return '';
+
+  // State A — check for existing listing.
+  // PRIMARY: inline permit-feature data (FK-based, deterministic).
+  // FALLBACK: Session 18 address/coord matching.
+  let listing = null;
+  if (p.has_listing === true && p.listing_detail_url) {
+    listing = {
+      thumbnail:       p.listing_thumbnail || '',
+      developer_name:  p.developer_name || 'Wynston Developer',
+      tier:            (p.listing_tier || 'free').toLowerCase(),
+      detail_url:      p.listing_detail_url
+    };
+  } else {
+    listing = findListingForPermit(p);
+  }
+
+  if (listing) {
+    const thumb = listing.thumbnail || '';
+    const dev   = listing.developer_name || 'Wynston Developer';
+    const tier  = (listing.tier || 'free').toLowerCase();
+    const tierLabel = tier.charAt(0).toUpperCase() + tier.slice(1);
+    const tierCls   = 'w-listing-tier-' + tier;
+    const thumbHtml = thumb
+      ? `<img src="${thumb}" class="w-listing-thumb" alt="">`
+      : `<div class="w-listing-thumb w-listing-thumb-placeholder"><i class="fas fa-image"></i></div>`;
+    return `
+      <div class="w-section w-listing-banner">
+        ${thumbHtml}
+        <div class="w-listing-info">
+          <div class="w-listing-label"><i class="fas fa-check-circle"></i> Active Listing</div>
+          <div class="w-listing-dev">by ${escHtml(dev)}</div>
+          <div class="w-listing-meta"><span class="w-listing-tier-badge ${tierCls}">${tierLabel}</span></div>
+          <a href="${listing.detail_url}" target="_blank" rel="noopener" class="w-listing-btn"><i class="fas fa-external-link-alt"></i> View Property</a>
+        </div>
+      </div>`;
+  }
+
+  // States B/C: no listing found — only show CTA if user arrived via a permit star.
+  // Plain lot clicks without a permit context get nothing (they're just browsing
+  // feasibility, not looking to claim a project).
+  if (!p.fromPermit) return '';
+
+  // State B1: not logged in
+  if (!IS_LOGGED_IN) {
+    return `
+      <div class="w-section w-showcase-cta">
+        <div class="w-showcase-prompt"><i class="fas fa-hard-hat"></i> <strong>Is this your project?</strong></div>
+        <div class="w-showcase-sub">Sign in as a builder or realtor to showcase it on Wynston.</div>
+        <a href="/log-in.php" class="w-showcase-btn-outline"><i class="fas fa-sign-in-alt"></i> Sign In</a>
+      </div>`;
+  }
+
+  // State B2: logged in, builder or realtor
+  if (USER_TYPE === 'builder' || USER_TYPE === 'realtor') {
+    const addr = p.address || '';
+    const showcaseUrl = `/submit-property.php?pid=${encodeURIComponent(p.pid || '')}&source=permit_showcase&address=${encodeURIComponent(addr)}`;
+    return `
+      <div class="w-section w-showcase-cta">
+        <div class="w-showcase-prompt"><i class="fas fa-hard-hat"></i> <strong>Is this your project?</strong></div>
+        <div class="w-showcase-sub">Claim it on Wynston. Add photos, pricing, and showcase your build to investors and buyers.</div>
+        <a href="${showcaseUrl}" class="w-showcase-btn-gold"><i class="fas fa-plus-circle"></i> Showcase This Project</a>
+      </div>`;
+  }
+
+  // State B3: logged in, investor / broker / home_owner
+  return `
+    <div class="w-section w-showcase-cta">
+      <div class="w-showcase-note"><i class="fas fa-info-circle"></i> <em>Is this your project? Your builder or realtor can showcase it on Wynston.</em></div>
+    </div>`;
+}
+
+
+// escHtml helper — reused by renderPermitShowcaseBlock. If already
+// defined elsewhere in this file, this declaration is harmless.
+if (typeof escHtml !== 'function') {
+  window.escHtml = function(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));};
+}
+
 // ── Open lot panel ────────────────────────────────────────────
 function openPanel(pid) {
+  // Session 20: clear permitMeta only when a DIFFERENT pid opens.
+  // Two parallel renders for the SAME pid (common when map-level
+  // permit hit + lot-pins click both fire) keep permitMeta so the
+  // second render still has permit context and doesn't wipe the
+  // banner.
+  if (_lastOpenedPid !== null && _lastOpenedPid !== pid) {
+    permitMeta = null;
+  }
+  _lastOpenedPid = pid;
   currentLot=pid; currentPath='strata'; currentData=null;
   window._pfOverrides = {};
   window._pfRentalOverrides = {};
@@ -1032,16 +1297,54 @@ function renderPanel(d,tab) {
   document.getElementById('ph-address').textContent=d.property.address;
   document.getElementById('ph-pid').textContent=`PID ${d.property.pid}`;
   const elig=getEligBadge(d.property.lot_width_m,d.property.transit_proximate,d.property.lane_access);
+  // Session 18: capture permit data before permitMeta gets nulled below.
+  // Session 20 fix: spread the full permit properties so has_listing,
+  // listing_tier, listing_thumbnail, listing_detail_url, and
+  // developer_name flow through to renderPermitShowcaseBlock. Without
+  // this, only 5 fields were passed and the inline listing data from
+  // api/permits.php (via the multi_2025_id FK) never reached the renderer,
+  // forcing every call to fall back to the address-matching lookup.
+  const _permitForShowcase = permitMeta ? {
+    ...permitMeta,
+    address: permitMeta.address || d.property.address,
+    pid: d.property.pid,
+    _lat: permitMeta._lat ?? permitMeta.lat ?? d.property.lat,
+    _lng: permitMeta._lng ?? permitMeta.lng ?? d.property.lng,
+    fromPermit: true
+  } : null;
   if(permitMeta){
     document.getElementById('ph-badge').innerHTML=`<div class="w-elig-badge badge-gold"><i class="fas fa-hard-hat"></i> Active Building Permit</div>`;
     document.getElementById('ph-confidence').innerHTML=`<div class="w-confidence conf-amber"><i class="fas fa-hard-hat" style="font-size:10px"></i><span><strong>Development In Progress</strong> — Feasibility data based on current market conditions.</span></div>`;
-    permitMeta=null;
+    // Session 20: permitMeta intentionally kept. Cleared in openPanel
+    // when a different pid opens. Keeping it here lets parallel
+    // renders for the same pid both show the banner correctly.
   } else {
     document.getElementById('ph-badge').innerHTML=`<div class="w-elig-badge ${elig.cls}">${elig.icon} ${elig.label}</div>`;
     const conf=d.confidence;
     document.getElementById('ph-confidence').innerHTML=`<div class="w-confidence conf-${conf.colour}"><i class="fas fa-chart-bar" style="font-size:10px"></i><span><strong>${conf.label}</strong> — ${conf.description}</span></div>`;
   }
   renderPanelBody(d,tab);
+
+  // Session 18: Always try to render showcase block for any lot.
+  // Two paths to reach here: (A) clicked a gold star → _permitForShowcase
+  // is set → use permit address+coords for lookup. (B) clicked a plain lot
+  // pin → no permit context → use the lot's own address+coords. Either way,
+  // if the lot has a matching listing in multi_2025, show the thumbnail +
+  // "View Details" block. If not, and user is builder/realtor, show the
+  // "Showcase This Project" CTA.
+  const _showcaseCtx = _permitForShowcase || {
+    address: d.property.address,
+    pid: d.property.pid,
+    _lat: d.property.lat,
+    _lng: d.property.lng,
+    fromPermit: false
+  };
+  const showcaseHtml = renderPermitShowcaseBlock(_showcaseCtx);
+  if (showcaseHtml) {
+    const body = document.getElementById('panel-body');
+    if (body) body.insertAdjacentHTML('afterbegin', showcaseHtml);
+  }
+
   const actions=document.getElementById('panel-actions');
   actions.style.display='flex';
   const reportBtnLabel = tab === 'compare' ? 'Generate Full Comparison Report' : 'Generate PDF Report';
@@ -1802,14 +2105,48 @@ function renderSearchResults(results,q){
   searchResults.classList.add('open');
 }
 
-// Search result — fly to lot AND set highlight ring simultaneously
+// Search result — fly to lot AND set highlight ring simultaneously.
+// Session 20 v2: wait for flyTo to finish, then use
+// queryRenderedFeatures at the target pixel to detect a permit.
+// Matches how the click handler works. Falls through to plain
+// openPanel() if no permit is at that lot.
 function selectSearchResult(lat,lng,pid){
   closeSearchDropdown();
   searchInput.value='';
   searchClear.classList.remove('visible');
-  map.flyTo({center:[lng,lat],zoom:17,duration:900});
-  setSelectedLot(lat,lng);
-  setTimeout(()=>openPanel(pid),300);
+  setSelectedLot(lat, lng);
+
+  // Single-shot moveend handler: runs when flyTo finishes.
+  const onArrive = () => {
+    map.off('moveend', onArrive);
+    // Give the permit-pins layer one frame to finish rendering.
+    requestAnimationFrame(() => {
+      try {
+        const pixel = map.project([lng, lat]);
+        // Expand pixel to a small bbox (±10px) to be forgiving
+        // on sub-pixel positioning differences.
+        const bbox = [
+          [pixel.x - 10, pixel.y - 10],
+          [pixel.x + 10, pixel.y + 10]
+        ];
+        const hits = map.queryRenderedFeatures(bbox, { layers: ['permit-pins'] });
+        if (hits && hits.length > 0) {
+          const pf = hits[0];
+          const pp = Object.assign({}, pf.properties);
+          const pc = pf.geometry.coordinates;
+          pp._lng = pc[0]; pp._lat = pc[1];
+          openPermitPanel(pp);
+          return;
+        }
+      } catch (err) {
+        console.warn('selectSearchResult permit hit-test failed:', err);
+      }
+      // No permit at this lot — plain lot panel.
+      openPanel(pid);
+    });
+  };
+  map.on('moveend', onArrive);
+  map.flyTo({ center: [lng, lat], zoom: 17, duration: 900 });
 }
 
 function clearSearch(){searchInput.value='';searchClear.classList.remove('visible');closeSearchDropdown();searchInput.focus();}

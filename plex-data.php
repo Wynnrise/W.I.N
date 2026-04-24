@@ -435,6 +435,8 @@ body{background:#f0f4f8;font-family:'Segoe UI',system-ui,sans-serif;margin:0;pad
         <i class="fas fa-chart-bar"></i> Market Prices</a>
     <a href="plex-data.php?tab=channel-b" class="<?= $active_tab==='channel-b'?'active':'' ?>">
         <i class="fas fa-home"></i> Rental Data</a>
+    <a href="plex-data.php?tab=channel-c" class="<?= $active_tab==='channel-c'?'active':'' ?>">
+        <i class="fas fa-building"></i> COV Permits</a>
     <a href="plex-data.php?tab=channel-d" class="<?= $active_tab==='channel-d'?'active':'' ?>">
         <i class="fas fa-landmark"></i> CMHC Benchmarks</a>
     <a href="plex-data.php?tab=outlook" class="tab-outlook <?= $active_tab==='outlook'?'active':'' ?>">
@@ -814,6 +816,96 @@ elseif ($active_tab === 'channel-b'): ?>
             To update CMHC data, use the <a href="plex-data.php?tab=channel-d" style="color:var(--blue);font-weight:700;">CMHC Benchmarks tab</a>.
         </div>
     </div>
+</div>
+
+<?php // ══════════════════════════════════════════════════════════════════════
+      // TAB — COV BUILDING PERMITS (Channel C)
+      // Upsert-safe importer for City of Vancouver issued building permits.
+      // Two-phase: dry-run preview → commit with token.
+      // ══════════════════════════════════════════════════════════════════════
+elseif ($active_tab === 'channel-c'): ?>
+
+<div class="card" style="margin-bottom:24px;">
+    <h3><i class="fas fa-building me-2" style="color:var(--blue)"></i>COV Issued Building Permits
+        <span class="freq-badge ms-2">Monthly</span></h3>
+    <p class="sub">Upload the latest COV issued building permits CSV. The importer filters to Wynston's 1–6 unit scope (condos 7+ units are flagged out-of-scope). Always dry-run first: review the counts, then commit.</p>
+    <div class="info-box">
+        <strong>COV open data source:</strong>
+        <a href="https://opendata.vancouver.ca/explore/dataset/issued-building-permits/export/" target="_blank" rel="noopener" style="color:var(--blue);font-weight:700">opendata.vancouver.ca — Issued building permits</a><br>
+        Export as <strong>CSV (semicolon)</strong>. Filter to <strong>TypeOfWork = New Building</strong> and <strong>PropertyUse contains Dwelling Uses</strong> before downloading.<br>
+        <strong>Wynston scope rule:</strong> permits with 1–6 units are imported and shown on the map. Permits with 7+ units are imported but flagged out-of-scope (condo territory — handled by other marketing channels). Permits whose unit count can't be parsed from the description are held back for admin review.
+    </div>
+    <div id="chC-result"></div>
+
+    <div class="row g-3 mb-3">
+        <div class="col-md-4">
+            <label class="form-label">City</label>
+            <select id="chC_city" class="form-select">
+                <option value="vancouver" selected>Vancouver</option>
+            </select>
+        </div>
+    </div>
+
+    <script>
+    var _chC_file = null;
+    var _chC_token = null;
+    function chCHandleFile(f) {
+        if (!f) return;
+        _chC_file = f;
+        _chC_token = null;
+        document.getElementById('chC_dz').classList.add('dz-selected');
+        document.getElementById('chC_dz_icon').className = 'fas fa-check-circle';
+        document.getElementById('chC_dz_text').textContent = '✅ ' + f.name + ' — ready to preview';
+        document.getElementById('chC_commit_wrap').style.display = 'none';
+    }
+    function chCHandleDrop(e) {
+        e.preventDefault();
+        document.getElementById('chC_dz').classList.remove('dz-active');
+        var files = e.dataTransfer && e.dataTransfer.files;
+        if (files && files[0]) chCHandleFile(files[0]);
+    }
+    function chCDragOver(e) { e.preventDefault(); document.getElementById('chC_dz').classList.add('dz-active'); }
+    function chCDragLeave()  { document.getElementById('chC_dz').classList.remove('dz-active'); }
+    </script>
+
+    <div class="dz" id="chC_dz"
+         onclick="document.getElementById('chC_file').click()"
+         ondragover="chCDragOver(event)"
+         ondragleave="chCDragLeave()"
+         ondrop="chCHandleDrop(event)">
+        <div><i class="fas fa-file-csv dz-icon" id="chC_dz_icon"></i></div>
+        <div class="dz-text" id="chC_dz_text">Drag &amp; drop COV permits CSV here, or <span style="color:var(--brand);text-decoration:underline;">click to browse</span></div>
+        <input type="file" id="chC_file" accept=".csv" style="display:none"
+               onchange="chCHandleFile(this.files[0])">
+    </div>
+
+    <div id="chC_progress" style="display:none;margin-top:12px;padding:12px 16px;background:#f0f9ff;border-radius:8px;font-size:13px;color:#0369a1;">
+        <i class="fas fa-spinner fa-spin me-2"></i><span id="chC_progress_msg">Processing CSV...</span>
+    </div>
+
+    <button class="btn-primary-w mt-3" id="chC_submit" onclick="submitChannelC()">
+        <i class="fas fa-eye"></i>Preview (Dry Run)
+    </button>
+
+    <div id="chC_preview" style="display:none;margin-top:20px;">
+        <div id="chC_summary"></div>
+        <div id="chC_buckets"></div>
+    </div>
+
+    <div id="chC_commit_wrap" style="display:none;margin-top:20px;padding:16px;background:#fffbf0;border:2px solid #c9a84c;border-radius:8px;">
+        <div style="font-size:13px;font-weight:700;color:#002446;margin-bottom:10px;">
+            <i class="fas fa-exclamation-triangle me-2" style="color:#c9a84c;"></i>
+            Review the preview above, then commit to write to the database.
+        </div>
+        <button class="btn-primary-w" id="chC_commit_btn" onclick="commitChannelC()" style="background:#15803d;">
+            <i class="fas fa-check-circle"></i>Commit to Database
+        </button>
+        <button class="btn-primary-w" onclick="cancelChannelC()" style="background:#64748b;margin-left:8px;">
+            <i class="fas fa-times"></i>Cancel
+        </button>
+    </div>
+
+    <div id="chC_commit_result" style="display:none;margin-top:20px;"></div>
 </div>
 
 <?php // ══════════════════════════════════════════════════════════════════════
@@ -1985,6 +2077,181 @@ function postJSON(url,data,cb){
 }
 
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+// ── Channel C — COV Permits (dry-run → commit flow) ──────────────────────────
+function submitChannelC() {
+    if (!_chC_file) { showR('chC-result','Please select or drop a CSV file first.','err'); return; }
+    var city = document.getElementById('chC_city').value;
+    if (!city) { showR('chC-result','Please select a city.','err'); return; }
+
+    var fd = new FormData();
+    fd.append('permit_csv', _chC_file, _chC_file.name);
+    fd.append('mode', 'dry_run');
+    fd.append('city', city);
+
+    document.getElementById('chC_progress').style.display = 'block';
+    document.getElementById('chC_submit').disabled = true;
+    document.getElementById('chC_preview').style.display = 'none';
+    document.getElementById('chC_commit_wrap').style.display = 'none';
+    document.getElementById('chC_commit_result').style.display = 'none';
+    document.getElementById('chC-result').innerHTML = '';
+
+    var mi = 0;
+    var msgs = ['Reading CSV rows...','Parsing unit counts...','Checking against existing permits...','Classifying rows...','Staging preview...'];
+    var pmsg = document.getElementById('chC_progress_msg');
+    var tk = setInterval(function(){ pmsg.textContent = msgs[mi++ % msgs.length]; }, 1200);
+
+    fetch('api/plex_upload_c.php', { method:'POST', body:fd })
+    .then(function(r){ if (!r.ok) throw new Error('Server returned ' + r.status); return r.json(); })
+    .then(function(d){
+        clearInterval(tk);
+        document.getElementById('chC_progress').style.display = 'none';
+        document.getElementById('chC_submit').disabled = false;
+        if (!d.success) { showR('chC-result','❌ '+(d.error||'Dry run failed.')+(d.detail?'<br><small>'+esc(d.detail)+'</small>':''),'err'); return; }
+
+        _chC_token = d.token;
+        showR('chC-result','✅ Dry run complete — review below, then commit.','ok');
+        renderChCPreview(d);
+        document.getElementById('chC_preview').style.display = 'block';
+        document.getElementById('chC_commit_wrap').style.display = 'block';
+    })
+    .catch(function(e){
+        clearInterval(tk);
+        document.getElementById('chC_progress').style.display='none';
+        document.getElementById('chC_submit').disabled=false;
+        showR('chC-result','Network error: '+esc(e.message),'err');
+    });
+}
+
+function renderChCPreview(d) {
+    var s = d.summary || {};
+    var total = d.csv_total || 0;
+    var willWrite = (s.new_in_scope||0) + (s.new_out_of_scope||0)
+                  + (s.update_in_scope||0) + (s.update_out_of_scope||0) + (s.update_unknown||0);
+    var willSkip = (s.new_unknown||0);
+
+    var h = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:18px;">';
+    h += chCStatCard('CSV Rows',            total,                  '#64748b');
+    h += chCStatCard('New — In Scope',      s.new_in_scope||0,      '#15803d');
+    h += chCStatCard('New — Out of Scope',  s.new_out_of_scope||0,  '#b45309');
+    h += chCStatCard('New — Unknown (SKIP)', s.new_unknown||0,      '#64748b');
+    h += chCStatCard('Updates — In Scope',  s.update_in_scope||0,   '#0369a1');
+    h += chCStatCard('Updates — Out of Scope', s.update_out_of_scope||0,'#b45309');
+    h += chCStatCard('Updates — Unknown',   s.update_unknown||0,    '#64748b');
+    h += chCStatCard('Orphans (flag only)', s.orphans||0,           '#7c3aed');
+    h += '</div>';
+
+    h += '<div style="padding:10px 14px;background:#f0fdf4;border-left:3px solid #15803d;border-radius:6px;font-size:12px;color:#555;margin-bottom:16px;">';
+    h += '<strong>On commit:</strong> '+willWrite+' rows will be written · '+willSkip+' rows held back for review · '+(s.orphans||0)+' orphan permits flagged (no deletes).';
+    h += '</div>';
+
+    document.getElementById('chC_summary').innerHTML = h;
+
+    var samples = d.preview_samples || {};
+    var b = '';
+    b += chCBucketTable('New — In Scope (1–6 units, will INSERT + shadow)',         samples.new_in_scope,        '#15803d', true);
+    b += chCBucketTable('New — Out of Scope (>6 units, INSERT but flagged out)',    samples.new_out_of_scope,    '#b45309', true);
+    b += chCBucketTable('New — Unknown unit count (SKIPPED, review manually)',      samples.new_unknown,         '#64748b', false);
+    b += chCBucketTable('Updates — Out of Scope (>6 units, will flag existing row)', samples.update_out_of_scope,'#b45309', true);
+    b += chCBucketTable('Updates — Unknown unit count (will preserve existing)',    samples.update_unknown,      '#64748b', false);
+    document.getElementById('chC_buckets').innerHTML = b;
+}
+
+function chCStatCard(label, value, color) {
+    return '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px;">'
+         + '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:#888;font-weight:700;margin-bottom:4px;">'+esc(label)+'</div>'
+         + '<div style="font-size:22px;font-weight:800;color:'+color+';">'+value+'</div>'
+         + '</div>';
+}
+
+function chCBucketTable(title, rows, color, showUnits) {
+    if (!rows || !rows.length) return '';
+    var h = '<div style="margin-bottom:18px;">';
+    h += '<div style="font-size:12px;font-weight:700;color:'+color+';margin-bottom:6px;">'+esc(title)+' <span style="color:#888;font-weight:600;">(showing up to '+rows.length+')</span></div>';
+    h += '<div style="overflow-x:auto;"><table class="preview-table">';
+    h += '<thead><tr><th>Permit #</th><th>Address</th><th>Neighbourhood</th>';
+    if (showUnits) h += '<th>Units</th>';
+    h += '<th>Description snippet</th></tr></thead><tbody>';
+    rows.forEach(function(r){
+        h += '<tr>';
+        h += '<td><code style="font-size:11px;">'+esc(r.permit_number||'')+'</code></td>';
+        h += '<td>'+esc(r.address||'')+'</td>';
+        h += '<td>'+esc(r.neighbourhood||'')+'</td>';
+        if (showUnits) h += '<td style="text-align:center;font-weight:700;">'+(r.unit_count!=null?r.unit_count:'—')+'</td>';
+        h += '<td style="font-size:11px;color:#666;">'+esc(r.desc_preview||'')+'…</td>';
+        h += '</tr>';
+    });
+    h += '</tbody></table></div></div>';
+    return h;
+}
+
+function commitChannelC() {
+    if (!_chC_token) { showR('chC-result','No dry-run token — run preview first.','err'); return; }
+    if (!confirm('Commit this import to the database? This will INSERT new permit rows, UPDATE existing ones, and flag orphans. Rollback is per-permit only (via database restore).')) return;
+
+    var fd = new FormData();
+    fd.append('mode', 'commit');
+    fd.append('token', _chC_token);
+
+    document.getElementById('chC_commit_btn').disabled = true;
+    document.getElementById('chC_progress').style.display = 'block';
+    document.getElementById('chC_progress_msg').textContent = 'Committing to database...';
+
+    fetch('api/plex_upload_c.php', { method:'POST', body:fd })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+        document.getElementById('chC_progress').style.display = 'none';
+        document.getElementById('chC_commit_btn').disabled = false;
+        var wrap = document.getElementById('chC_commit_result');
+        wrap.style.display = 'block';
+        if (!d.success) {
+            wrap.innerHTML = '<div class="result-box result-err"><strong>❌ Commit failed</strong> — all changes rolled back.<br>'
+                           + esc(d.error||'Unknown error')
+                           + (d.detail?'<br><small>'+esc(d.detail)+'</small>':'')
+                           + '</div>';
+            return;
+        }
+        var c = d.counts || {};
+        var html = '<div class="result-box result-ok"><strong>✅ Commit successful.</strong></div>';
+        html += '<div style="margin-top:12px;padding:14px;background:#f8fafc;border-radius:8px;font-size:13px;">';
+        html += '<strong style="color:#002446;">Results:</strong><br>';
+        html += '&bull; Permits inserted: <strong>'+(c.permits_inserted||0)+'</strong><br>';
+        html += '&bull; Permits updated: <strong>'+(c.permits_updated||0)+'</strong><br>';
+        html += '&bull; Permits skipped (unknown unit count): <strong>'+(c.permits_skipped||0)+'</strong><br>';
+        html += '&bull; Shadow rows inserted: <strong>'+(c.shadows_inserted||0)+'</strong><br>';
+        html += '&bull; Shadow rows updated: <strong>'+(c.shadows_updated||0)+'</strong><br>';
+        html += '&bull; Shadow rows skipped (out-of-scope permits): <strong>'+(c.shadows_skipped||0)+'</strong><br>';
+        html += '&bull; Orphan permits flagged: <strong>'+(c.orphans_flagged||0)+'</strong><br>';
+        html += '&bull; Admin-locked unit counts preserved: <strong>'+(c.admin_uc_preserved||0)+'</strong>';
+        html += '</div>';
+        if (d.errors && d.errors.length) {
+            html += '<div style="margin-top:10px;padding:10px;background:#fef2f2;border-left:3px solid #b91c1c;border-radius:4px;font-size:12px;color:#b91c1c;">';
+            html += '<strong>Warnings during commit:</strong><br>' + d.errors.slice(0,10).map(esc).join('<br>');
+            html += '</div>';
+        }
+        wrap.innerHTML = html;
+
+        _chC_token = null;
+        _chC_file = null;
+        document.getElementById('chC_commit_wrap').style.display = 'none';
+        document.getElementById('chC_dz').classList.remove('dz-selected');
+        document.getElementById('chC_dz_icon').className = 'fas fa-file-csv';
+        document.getElementById('chC_dz_text').innerHTML = 'Drag &amp; drop COV permits CSV here, or <span style="color:var(--brand);text-decoration:underline;">click to browse</span>';
+        document.getElementById('chC_file').value = '';
+    })
+    .catch(function(e){
+        document.getElementById('chC_progress').style.display = 'none';
+        document.getElementById('chC_commit_btn').disabled = false;
+        showR('chC-result','Network error during commit: '+esc(e.message),'err');
+    });
+}
+
+function cancelChannelC() {
+    _chC_token = null;
+    document.getElementById('chC_commit_wrap').style.display = 'none';
+    document.getElementById('chC_preview').style.display = 'none';
+    showR('chC-result','Cancelled — staged data will auto-expire in 24 hours.','info');
+}
 </script>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
